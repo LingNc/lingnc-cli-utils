@@ -19,118 +19,199 @@ SERVER_HOST="example.com"
 #SERVER_IP="ipv4_address"
 # ===========================================
 
+# 工具名称与安装路径
+TOOL_NAME="tun-proxy"
+INSTALL_PATH="/usr/local/bin/$TOOL_NAME"
+
+# 状态文件路径 (用于存储 PID 和 路由信息，以便停止时清理)
+PID_FILE="/var/run/tun-proxy.pid"
+STATE_FILE="/var/run/tun-proxy.state"
+
 # 0. 权限检查（需要 root，建议使用 sudo -E 保留 SSH 环境变量）
 if [[ $EUID -ne 0 ]]; then
-    echo "❌ 错误: 此脚本必须以 Root 权限运行！"
-    echo "请使用命令: sudo -E $0"
+    echo "[X] 错误: 此脚本必须以 Root 权限运行！"
+    echo "请使用命令: sudo -E $0 {install|uninstall|start|stop|restart|status}"
     exit 1
 fi
 
-# ================= 自动解析逻辑 =================
-# 自动将域名解析为 IP 地址
-# 如果系统没有 dig 命令，请安装 dnsutils (apt install dnsutils)
-echo "[*] 正在解析 $SERVER_HOST ..."
-SERVER_IP=$(dig +short $SERVER_HOST | grep -E '^[0-9.]+$' | head -n 1)
-
-# 如果解析失败（比如 dig 没装，或者域名填错了），尝试用 ping 拿 IP
-if [ -z "$SERVER_IP" ]; then
-    SERVER_IP=$(ping -c 1 $SERVER_HOST | sed -n 's/.*(\([0-9.]\+\)).*/\1/p' | head -n 1)
-fi
-
-# 检查是否获取到了 IP
-if [ -z "$SERVER_IP" ]; then
-    echo "❌ 错误: 无法解析域名 $SERVER_HOST 的 IP 地址。"
-    echo "请检查域名拼写，或确保已联网。"
-    exit 1
-fi
-
-echo "-> 目标服务器 ($SERVER_HOST) 解析 IP 为: $SERVER_IP"
-
-# 构造使用 IP 的 Proxy 字符串，避免隧道内 DNS 解析
-SOCKS_PROXY=$(echo $RAW_PROXY | sed "s/$SERVER_HOST/$SERVER_IP/")
-# ======================================================
-
-
-# 获取物理网关和物理网卡名称
 ORIGINAL_GATEWAY=$(ip route show default | awk '/default/ {print $3}')
 ORIGINAL_INTERFACE=$(ip route show default | awk '/default/ {print $5}')
 
-# 自动获取当前 SSH 客户端 IP（用于保护现有 SSH 连接不走代理）
-MY_SSH_IP=$(echo "$SSH_CLIENT" | awk '{print $1}')
+check_dependencies() {
+    local missing=0
+    for dep in tun2socks ip awk dig; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            echo "[X] 缺少必要软件: $dep"
+            missing=1
+        fi
+    done
 
-# 如果通过 sudo 执行但未保留环境变量，则提示（检测 sudo -E）
-if [ -n "$SUDO_USER" ] && [ -z "$MY_SSH_IP" ]; then
-    echo "⚠️ 警告: 检测到 sudo 环境但 SSH_CLIENT 为空，可能未使用 sudo -E，SSH 保护将失效。"
-fi
+    if [ $missing -ne 0 ]; then
+        echo "请先安装缺失的软件 (例如 apt install dnsutils 安装 dig)。"
+        exit 1
+    fi
+}
 
-setup_route() {
-    echo "[+] 正在启动 tun2socks..."
-    # 启动 tun2socks 并在后台运行
-    # 注意：-interface 参数指定流量最终出口，防止回环
-    tun2socks -device $TUN_DEV -proxy "$SOCKS_PROXY" -interface $ORIGINAL_INTERFACE -loglevel warn &
-    TUN_PID=$!
+resolve_server_ip() {
+    local ip
+    echo "[*] 正在解析 $SERVER_HOST ..." >&2
+    ip=$(dig +short "$SERVER_HOST" | grep -E '^[0-9.]+$' | head -n 1)
+    if [ -z "$ip" ]; then
+        ip=$(ping -c 1 "$SERVER_HOST" | sed -n 's/.*(\([0-9.]\+\)).*/\1/p' | head -n 1)
+    fi
 
-    # 等待 tun0 设备创建，并校验进程是否存活
-    sleep 1
-    if ! kill -0 $TUN_PID 2>/dev/null; then
-        echo "❌ [致命错误] tun2socks 启动失败！请检查日志。"
+    if [ -z "$ip" ]; then
+        echo "[X] 错误: 无法解析域名 $SERVER_HOST 的 IP 地址。" >&2
+        echo "请检查域名拼写，或确保已联网。" >&2
         exit 1
     fi
 
-    echo "[+] 配置网卡 $TUN_DEV..."
-    ip addr add $TUN_ADDR/24 dev $TUN_DEV
-    ip link set $TUN_DEV up
+    echo "$ip"
+}
 
-    echo "[+] 添加路由规则..."
-    # 1. 关键：确保去往代理服务器(VPS)的流量一定走物理网关 (防止死循环)
-    ip route add $SERVER_IP via $ORIGINAL_GATEWAY dev $ORIGINAL_INTERFACE
+start_proxy() {
+    check_dependencies
 
-    # 2. 新增：保护当前 SSH 连接（若存在），避免断连
+    if [ -f "$PID_FILE" ]; then
+        if kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            echo "[!] 代理已经在运行 (PID: $(cat "$PID_FILE"))。"
+            return
+        else
+            echo "[!] 检测到残留的 PID 文件，正在清理..."
+            rm -f "$PID_FILE" "$STATE_FILE"
+        fi
+    fi
+
+    SERVER_IP=$(resolve_server_ip)
+
+    SOCKS_PROXY=${RAW_PROXY/$SERVER_HOST/$SERVER_IP}
+    MY_SSH_IP=$(echo "$SSH_CLIENT" | awk '{print $1}')
+
+    echo "[+] 启动 tun2socks (后台)..."
+    nohup tun2socks -device "$TUN_DEV" -proxy "$SOCKS_PROXY" -interface "$ORIGINAL_INTERFACE" -loglevel warn >/dev/null 2>&1 &
+    NEW_PID=$!
+
+    sleep 1
+    if ! kill -0 "$NEW_PID" 2>/dev/null; then
+        echo "[X] 启动失败，进程已退出。"
+        exit 1
+    fi
+
+    echo "$NEW_PID" > "$PID_FILE"
+    {
+        echo "SERVER_IP=$SERVER_IP"
+        echo "MY_SSH_IP=$MY_SSH_IP"
+    } > "$STATE_FILE"
+
+    echo "[+] 配置网卡与路由..."
+    ip addr flush dev "$TUN_DEV" 2>/dev/null
+    ip addr add "$TUN_ADDR"/24 dev "$TUN_DEV"
+    ip link set "$TUN_DEV" up
+
+    ip route add "$SERVER_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE"
     if [ -n "$MY_SSH_IP" ]; then
-        echo "[+] 检测到 SSH 来源 $MY_SSH_IP，添加保护路由..."
-        ip route add $MY_SSH_IP via $ORIGINAL_GATEWAY dev $ORIGINAL_INTERFACE
+        echo "[+] SSH 保护生效: $MY_SSH_IP"
+        ip route add "$MY_SSH_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE"
+    fi
+    ip route add 0.0.0.0/1 dev "$TUN_DEV"
+    ip route add 128.0.0.0/1 dev "$TUN_DEV"
+
+    echo ">>> 代理已启动 (PID: $NEW_PID)"
+    echo ">>> 使用 'sudo -E $0 stop' 关闭代理。"
+}
+
+install_tool() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "[X] 安装需要 Root 权限，请使用 sudo。"
+        exit 1
+    fi
+
+    check_dependencies
+
+    cp "$0" "$INSTALL_PATH"
+    chmod +x "$INSTALL_PATH"
+    echo "[+] 安装成功，可用: sudo -E $TOOL_NAME start"
+}
+
+uninstall_tool() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "[X] 卸载需要 Root 权限。"
+        exit 1
+    fi
+
+    if [ -f "$PID_FILE" ]; then
+        stop_proxy
+    fi
+
+    rm -f "$INSTALL_PATH"
+    echo "[+] 已卸载。"
+}
+
+stop_proxy() {
+    if [ ! -f "$PID_FILE" ]; then
+        echo "[!] 代理似乎未运行 (找不到 PID 文件)。"
+        ip link set "$TUN_DEV" down 2>/dev/null
+        ip addr flush dev "$TUN_DEV" 2>/dev/null
+        return
+    fi
+
+    PID=$(cat "$PID_FILE")
+    if [ -f "$STATE_FILE" ]; then
+        # shellcheck source=/dev/null
+        source "$STATE_FILE"
+    fi
+
+    echo "[+] 正在停止代理 (PID: $PID)..."
+    kill "$PID" 2>/dev/null
+
+    echo "[+] 清理路由规则..."
+    ip route del 0.0.0.0/1 dev "$TUN_DEV" 2>/dev/null
+    ip route del 128.0.0.0/1 dev "$TUN_DEV" 2>/dev/null
+    if [ -n "$SERVER_IP" ]; then
+        ip route del "$SERVER_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    fi
+    if [ -n "$MY_SSH_IP" ]; then
+        ip route del "$MY_SSH_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    fi
+
+    ip addr flush dev "$TUN_DEV" 2>/dev/null
+    ip link set "$TUN_DEV" down 2>/dev/null
+
+    rm -f "$PID_FILE" "$STATE_FILE"
+    echo ">>> 代理已关闭，网络已还原。"
+}
+
+status_proxy() {
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        echo "[+] 代理正在运行 (PID: $(cat "$PID_FILE"))"
     else
-        echo "⚠️  [警告] 未检测到 SSH 环境变量！如果通过 SSH 运行，可能会断网！"
-        echo "    请确认你使用了 'sudo -E' 运行此脚本。"
-        echo "    3 秒后继续..."
-        sleep 3
+        echo "[!] 代理未运行"
     fi
-
-    # 3. 将所有流量导向 TUN 设备
-    # 使用 0.0.0.0/1 和 128.0.0.0/1 覆盖默认路由，而不是删除默认路由 (更安全)
-    ip route add 0.0.0.0/1 dev $TUN_DEV
-    ip route add 128.0.0.0/1 dev $TUN_DEV
-
-    echo ">>> 全局代理已开启 (PID: $TUN_PID)"
-    echo ">>> 按 Ctrl+C 停止并还原网络..."
-
-    # 保持脚本运行，等待信号
-    wait $TUN_PID
 }
 
-cleanup() {
-    echo ""
-    echo "[!] 正在停止..."
-
-    # 杀掉 tun2socks 进程
-    if [ -n "$TUN_PID" ]; then
-        kill $TUN_PID 2>/dev/null
-    fi
-
-    # 清理路由 (删除我们添加的规则)
-    ip route del $SERVER_IP via $ORIGINAL_GATEWAY dev $ORIGINAL_INTERFACE 2>/dev/null
-    ip route del 0.0.0.0/1 dev $TUN_DEV 2>/dev/null
-    ip route del 128.0.0.0/1 dev $TUN_DEV 2>/dev/null
-    if [ -n "$MY_SSH_IP" ]; then
-        ip route del $MY_SSH_IP via $ORIGINAL_GATEWAY dev $ORIGINAL_INTERFACE 2>/dev/null
-    fi
-
-    echo ">>> 网络已还原"
-    exit 0
-}
-
-# 捕获 Ctrl+C (SIGINT) 和 终止信号 (SIGTERM)
-trap cleanup SIGINT SIGTERM
-
-# 开始执行
-setup_route
+case "$1" in
+    install)
+        install_tool
+        ;;
+    uninstall)
+        uninstall_tool
+        ;;
+    start)
+        start_proxy
+        ;;
+    stop)
+        stop_proxy
+        ;;
+    restart)
+        stop_proxy
+        sleep 1
+        start_proxy
+        ;;
+    status)
+        status_proxy
+        ;;
+    *)
+        echo "用法: sudo -E $0 {install|uninstall|start|stop|restart|status}"
+        exit 1
+        ;;
+esac
