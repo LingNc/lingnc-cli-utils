@@ -69,6 +69,17 @@ resolve_server_ip() {
     echo "$ip"
 }
 
+ensure_tun_device() {
+    if ip link show "$TUN_DEV" >/dev/null 2>&1; then
+        return
+    fi
+    echo "[+] 创建 TUN 设备 $TUN_DEV ..."
+    if ! ip tuntap add dev "$TUN_DEV" mode tun; then
+        echo "[X] 创建 TUN 设备失败，检查内核是否启用 TUN 或权限是否足够。"
+        exit 1
+    fi
+}
+
 start_proxy() {
     check_dependencies
 
@@ -102,6 +113,7 @@ start_proxy() {
     } > "$STATE_FILE"
 
     echo "[+] 配置网卡与路由..."
+    ensure_tun_device
     ip addr flush dev "$TUN_DEV" 2>/dev/null
     ip addr add "$TUN_ADDR"/24 dev "$TUN_DEV"
     ip link set "$TUN_DEV" up
@@ -132,7 +144,45 @@ debug_proxy() {
     SERVER_IP=$(resolve_server_ip)
     SOCKS_PROXY=${RAW_PROXY/$SERVER_HOST/$SERVER_IP}
 
+    cleanup_debug() {
+        if [ "${DEBUG_CLEANED:-0}" -eq 1 ]; then
+            return
+        fi
+        DEBUG_CLEANED=1
+        echo
+        echo "[+] 正在停止调试进程..."
+        if [ -n "$DEBUG_PID" ]; then
+            kill "$DEBUG_PID" 2>/dev/null
+        fi
+
+        echo "[+] 清理路由规则..."
+        ip route del 0.0.0.0/1 dev "$TUN_DEV" 2>/dev/null
+        ip route del 128.0.0.0/1 dev "$TUN_DEV" 2>/dev/null
+        ip route del "$SERVER_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+        while ip rule show | grep -q "sport 22"; do
+            ip rule del sport 22 lookup main
+        done
+        ip addr flush dev "$TUN_DEV" 2>/dev/null
+        ip link set "$TUN_DEV" down 2>/dev/null
+        echo ">>> 已清理，退出调试模式。"
+    }
+
+    trap cleanup_debug INT TERM EXIT
+
+    echo "[+] 启动 tun2socks (前台模式)..."
+    tun2socks -device "$TUN_DEV" -proxy "$SOCKS_PROXY" -interface "$ORIGINAL_INTERFACE" -loglevel debug &
+    DEBUG_PID=$!
+
+    echo "[+] 等待 tun2socks 初始化设备..."
+    sleep 2
+
+    if ! kill -0 "$DEBUG_PID" 2>/dev/null; then
+        echo "[X] tun2socks 启动失败，请检查上方输出。"
+        exit 1
+    fi
+
     echo "[+] 配置网卡与路由..."
+    ensure_tun_device
     ip addr flush dev "$TUN_DEV" 2>/dev/null
     ip addr add "$TUN_ADDR"/24 dev "$TUN_DEV"
     ip link set "$TUN_DEV" up
@@ -148,33 +198,10 @@ debug_proxy() {
     ip route add 0.0.0.0/1 dev "$TUN_DEV"
     ip route add 128.0.0.0/1 dev "$TUN_DEV"
 
-    cleanup_debug() {
-        if [ "${DEBUG_CLEANED:-0}" -eq 1 ]; then
-            return
-        fi
-        DEBUG_CLEANED=1
-        echo
-        echo "[+] 清理路由规则..."
-        ip route del 0.0.0.0/1 dev "$TUN_DEV" 2>/dev/null
-        ip route del 128.0.0.0/1 dev "$TUN_DEV" 2>/dev/null
-        ip route del "$SERVER_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
-        while ip rule show | grep -q "sport 22"; do
-            ip rule del sport 22 lookup main
-        done
-        ip addr flush dev "$TUN_DEV" 2>/dev/null
-        ip link set "$TUN_DEV" down 2>/dev/null
-        echo ">>> 已清理，退出调试模式。"
-    }
-
-    trap cleanup_debug INT TERM EXIT
-
-    echo "[+] 前台启动 tun2socks (loglevel=debug)..."
-    tun2socks -device "$TUN_DEV" -proxy "$SOCKS_PROXY" -interface "$ORIGINAL_INTERFACE" -loglevel debug
-    EXIT_CODE=$?
-
+    echo ">>> 调试运行中，按 Ctrl+C 退出..."
+    wait "$DEBUG_PID"
     cleanup_debug
     trap - INT TERM EXIT
-    return $EXIT_CODE
 }
 
 install_tool() {
