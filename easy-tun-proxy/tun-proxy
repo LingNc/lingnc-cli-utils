@@ -27,10 +27,10 @@ INSTALL_PATH="/usr/local/bin/$TOOL_NAME"
 PID_FILE="/var/run/tun-proxy.pid"
 STATE_FILE="/var/run/tun-proxy.state"
 
-# 0. 权限检查（需要 root，建议使用 sudo -E 保留 SSH 环境变量）
+# 0. 权限检查（需要 root）
 if [[ $EUID -ne 0 ]]; then
     echo "[X] 错误: 此脚本必须以 Root 权限运行！"
-    echo "请使用命令: sudo -E $0 {install|uninstall|start|stop|restart|status}"
+    echo "请使用命令: sudo $0 {install|uninstall|start|stop|restart|status}"
     exit 1
 fi
 
@@ -85,7 +85,6 @@ start_proxy() {
     SERVER_IP=$(resolve_server_ip)
 
     SOCKS_PROXY=${RAW_PROXY/$SERVER_HOST/$SERVER_IP}
-    MY_SSH_IP=$(echo "$SSH_CLIENT" | awk '{print $1}')
 
     echo "[+] 启动 tun2socks (后台)..."
     nohup tun2socks -device "$TUN_DEV" -proxy "$SOCKS_PROXY" -interface "$ORIGINAL_INTERFACE" -loglevel warn >/dev/null 2>&1 &
@@ -100,7 +99,6 @@ start_proxy() {
     echo "$NEW_PID" > "$PID_FILE"
     {
         echo "SERVER_IP=$SERVER_IP"
-        echo "MY_SSH_IP=$MY_SSH_IP"
     } > "$STATE_FILE"
 
     echo "[+] 配置网卡与路由..."
@@ -109,15 +107,18 @@ start_proxy() {
     ip link set "$TUN_DEV" up
 
     ip route add "$SERVER_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE"
-    if [ -n "$MY_SSH_IP" ]; then
-        echo "[+] SSH 保护生效: $MY_SSH_IP"
-        ip route add "$MY_SSH_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE"
-    fi
+    echo "[+] 添加策略路由保护 SSH (端口 22)..."
+    ip rule add sport 22 lookup main priority 1000
+
+    echo "[+] 添加局域网直连规则..."
+    ip route add 192.168.0.0/16 via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    ip route add 10.0.0.0/8 via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    ip route add 172.16.0.0/12 via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
     ip route add 0.0.0.0/1 dev "$TUN_DEV"
     ip route add 128.0.0.0/1 dev "$TUN_DEV"
 
     echo ">>> 代理已启动 (PID: $NEW_PID)"
-    echo ">>> 使用 'sudo -E $0 stop' 关闭代理。"
+    echo ">>> 使用 'sudo $0 stop' 关闭代理。"
 }
 
 install_tool() {
@@ -130,7 +131,7 @@ install_tool() {
 
     cp "$0" "$INSTALL_PATH"
     chmod +x "$INSTALL_PATH"
-    echo "[+] 安装成功，可用: sudo -E $TOOL_NAME start"
+    echo "[+] 安装成功，可用: sudo $TOOL_NAME start"
 }
 
 uninstall_tool() {
@@ -170,9 +171,11 @@ stop_proxy() {
     if [ -n "$SERVER_IP" ]; then
         ip route del "$SERVER_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
     fi
-    if [ -n "$MY_SSH_IP" ]; then
-        ip route del "$MY_SSH_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
-    fi
+
+    echo "[+] 清理策略路由..."
+    while ip rule show | grep -q "sport 22"; do
+        ip rule del sport 22 lookup main
+    done
 
     ip addr flush dev "$TUN_DEV" 2>/dev/null
     ip link set "$TUN_DEV" down 2>/dev/null
@@ -211,7 +214,7 @@ case "$1" in
         status_proxy
         ;;
     *)
-        echo "用法: sudo -E $0 {install|uninstall|start|stop|restart|status}"
+        echo "用法: sudo $0 {install|uninstall|start|stop|restart|status}"
         exit 1
         ;;
 esac
