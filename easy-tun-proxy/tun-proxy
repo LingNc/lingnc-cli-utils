@@ -1,0 +1,136 @@
+#!/bin/bash
+
+# ================= 配置区域 =================
+# 原始 SOCKS5 代理地址（保留域名，后续替换为 IP 以避免隧道内 DNS）
+RAW_PROXY="socks5://username:password@address:port"
+
+# 你的 TUN 设备名称 (通常不用改)
+TUN_DEV="tun0"
+TUN_ADDR="10.0.0.2"
+TUN_GATEWAY="10.0.0.1"
+TUN_NETMASK="255.255.255.0"
+
+# 这里填你的代理服务器域名 (或者 IP 也可以)
+SERVER_HOST="example.com"
+
+# [重要] 你的代理服务器(VPS/机场)的真实公网 IP
+# 必须设置此项，让连接代理服务器的流量走物理网卡，否则会死循环！
+# 如果你有多个服务器 IP，可以稍后在脚本里多加几行
+#SERVER_IP="ipv4_address"
+# ===========================================
+
+# 0. 权限检查（需要 root，建议使用 sudo -E 保留 SSH 环境变量）
+if [[ $EUID -ne 0 ]]; then
+    echo "❌ 错误: 此脚本必须以 Root 权限运行！"
+    echo "请使用命令: sudo -E $0"
+    exit 1
+fi
+
+# ================= 自动解析逻辑 =================
+# 自动将域名解析为 IP 地址
+# 如果系统没有 dig 命令，请安装 dnsutils (apt install dnsutils)
+echo "[*] 正在解析 $SERVER_HOST ..."
+SERVER_IP=$(dig +short $SERVER_HOST | grep -E '^[0-9.]+$' | head -n 1)
+
+# 如果解析失败（比如 dig 没装，或者域名填错了），尝试用 ping 拿 IP
+if [ -z "$SERVER_IP" ]; then
+    SERVER_IP=$(ping -c 1 $SERVER_HOST | sed -n 's/.*(\([0-9.]\+\)).*/\1/p' | head -n 1)
+fi
+
+# 检查是否获取到了 IP
+if [ -z "$SERVER_IP" ]; then
+    echo "❌ 错误: 无法解析域名 $SERVER_HOST 的 IP 地址。"
+    echo "请检查域名拼写，或确保已联网。"
+    exit 1
+fi
+
+echo "-> 目标服务器 ($SERVER_HOST) 解析 IP 为: $SERVER_IP"
+
+# 构造使用 IP 的 Proxy 字符串，避免隧道内 DNS 解析
+SOCKS_PROXY=$(echo $RAW_PROXY | sed "s/$SERVER_HOST/$SERVER_IP/")
+# ======================================================
+
+
+# 获取物理网关和物理网卡名称
+ORIGINAL_GATEWAY=$(ip route show default | awk '/default/ {print $3}')
+ORIGINAL_INTERFACE=$(ip route show default | awk '/default/ {print $5}')
+
+# 自动获取当前 SSH 客户端 IP（用于保护现有 SSH 连接不走代理）
+MY_SSH_IP=$(echo "$SSH_CLIENT" | awk '{print $1}')
+
+# 如果通过 sudo 执行但未保留环境变量，则提示（检测 sudo -E）
+if [ -n "$SUDO_USER" ] && [ -z "$MY_SSH_IP" ]; then
+    echo "⚠️ 警告: 检测到 sudo 环境但 SSH_CLIENT 为空，可能未使用 sudo -E，SSH 保护将失效。"
+fi
+
+setup_route() {
+    echo "[+] 正在启动 tun2socks..."
+    # 启动 tun2socks 并在后台运行
+    # 注意：-interface 参数指定流量最终出口，防止回环
+    tun2socks -device $TUN_DEV -proxy "$SOCKS_PROXY" -interface $ORIGINAL_INTERFACE -loglevel warn &
+    TUN_PID=$!
+
+    # 等待 tun0 设备创建，并校验进程是否存活
+    sleep 1
+    if ! kill -0 $TUN_PID 2>/dev/null; then
+        echo "❌ [致命错误] tun2socks 启动失败！请检查日志。"
+        exit 1
+    fi
+
+    echo "[+] 配置网卡 $TUN_DEV..."
+    ip addr add $TUN_ADDR/24 dev $TUN_DEV
+    ip link set $TUN_DEV up
+
+    echo "[+] 添加路由规则..."
+    # 1. 关键：确保去往代理服务器(VPS)的流量一定走物理网关 (防止死循环)
+    ip route add $SERVER_IP via $ORIGINAL_GATEWAY dev $ORIGINAL_INTERFACE
+
+    # 2. 新增：保护当前 SSH 连接（若存在），避免断连
+    if [ -n "$MY_SSH_IP" ]; then
+        echo "[+] 检测到 SSH 来源 $MY_SSH_IP，添加保护路由..."
+        ip route add $MY_SSH_IP via $ORIGINAL_GATEWAY dev $ORIGINAL_INTERFACE
+    else
+        echo "⚠️  [警告] 未检测到 SSH 环境变量！如果通过 SSH 运行，可能会断网！"
+        echo "    请确认你使用了 'sudo -E' 运行此脚本。"
+        echo "    3 秒后继续..."
+        sleep 3
+    fi
+
+    # 3. 将所有流量导向 TUN 设备
+    # 使用 0.0.0.0/1 和 128.0.0.0/1 覆盖默认路由，而不是删除默认路由 (更安全)
+    ip route add 0.0.0.0/1 dev $TUN_DEV
+    ip route add 128.0.0.0/1 dev $TUN_DEV
+
+    echo ">>> 全局代理已开启 (PID: $TUN_PID)"
+    echo ">>> 按 Ctrl+C 停止并还原网络..."
+
+    # 保持脚本运行，等待信号
+    wait $TUN_PID
+}
+
+cleanup() {
+    echo ""
+    echo "[!] 正在停止..."
+
+    # 杀掉 tun2socks 进程
+    if [ -n "$TUN_PID" ]; then
+        kill $TUN_PID 2>/dev/null
+    fi
+
+    # 清理路由 (删除我们添加的规则)
+    ip route del $SERVER_IP via $ORIGINAL_GATEWAY dev $ORIGINAL_INTERFACE 2>/dev/null
+    ip route del 0.0.0.0/1 dev $TUN_DEV 2>/dev/null
+    ip route del 128.0.0.0/1 dev $TUN_DEV 2>/dev/null
+    if [ -n "$MY_SSH_IP" ]; then
+        ip route del $MY_SSH_IP via $ORIGINAL_GATEWAY dev $ORIGINAL_INTERFACE 2>/dev/null
+    fi
+
+    echo ">>> 网络已还原"
+    exit 0
+}
+
+# 捕获 Ctrl+C (SIGINT) 和 终止信号 (SIGTERM)
+trap cleanup SIGINT SIGTERM
+
+# 开始执行
+setup_route
