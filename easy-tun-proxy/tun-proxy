@@ -1,0 +1,306 @@
+#!/bin/bash
+
+# ================= 配置区域 =================
+# 原始 SOCKS5 代理地址（保留域名，后续替换为 IP 以避免隧道内 DNS）
+RAW_PROXY="socks5://username:password@address:port"
+
+# 你的 TUN 设备名称 (通常不用改)
+TUN_DEV="tun0"
+TUN_ADDR="10.0.0.2"
+TUN_GATEWAY="10.0.0.1"
+TUN_NETMASK="255.255.255.0"
+
+# 这里填你的代理服务器域名 (或者 IP 也可以)
+SERVER_HOST="example.com"
+
+# [重要] 你的代理服务器(VPS/机场)的真实公网 IP
+# 必须设置此项，让连接代理服务器的流量走物理网卡，否则会死循环！
+# 如果你有多个服务器 IP，可以稍后在脚本里多加几行
+#SERVER_IP="ipv4_address"
+# ===========================================
+
+# 工具名称与安装路径
+TOOL_NAME="tun-proxy"
+INSTALL_PATH="/usr/local/bin/$TOOL_NAME"
+
+# 状态文件路径 (用于存储 PID 和 路由信息，以便停止时清理)
+PID_FILE="/var/run/tun-proxy.pid"
+STATE_FILE="/var/run/tun-proxy.state"
+
+# 0. 权限检查（需要 root）
+if [[ $EUID -ne 0 ]]; then
+    echo "[X] 错误: 此脚本必须以 Root 权限运行！"
+    echo "请使用命令: sudo $0 {install|uninstall|start|stop|restart|status|debug}"
+    exit 1
+fi
+
+ORIGINAL_GATEWAY=$(ip route show default | awk '/default/ {print $3}' | head -n 1)
+ORIGINAL_INTERFACE=$(ip route show default | awk '/default/ {print $5}' | head -n 1)
+
+check_dependencies() {
+    local missing=0
+    for dep in tun2socks ip awk dig; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            echo "[X] 缺少必要软件: $dep"
+            missing=1
+        fi
+    done
+
+    if [ $missing -ne 0 ]; then
+        echo "请先安装缺失的软件 (例如 apt install dnsutils 安装 dig，tun2socks需要从官网下载)。"
+        exit 1
+    fi
+}
+
+resolve_server_ip() {
+    local ip
+    echo "[*] 正在解析 $SERVER_HOST ..." >&2
+    ip=$(dig +short "$SERVER_HOST" | grep -E '^[0-9.]+$' | head -n 1)
+    if [ -z "$ip" ]; then
+        ip=$(ping -c 1 "$SERVER_HOST" | sed -n 's/.*(\([0-9.]\+\)).*/\1/p' | head -n 1)
+    fi
+
+    if [ -z "$ip" ]; then
+        echo "[X] 错误: 无法解析域名 $SERVER_HOST 的 IP 地址。" >&2
+        echo "请检查域名拼写，或确保已联网。" >&2
+        exit 1
+    fi
+
+    echo "$ip"
+}
+
+ensure_tun_device() {
+    if ip link show "$TUN_DEV" >/dev/null 2>&1; then
+        return
+    fi
+    echo "[+] 创建 TUN 设备 $TUN_DEV ..."
+    if ! ip tuntap add dev "$TUN_DEV" mode tun; then
+        echo "[X] 创建 TUN 设备失败，检查内核是否启用 TUN 或权限是否足够。"
+        exit 1
+    fi
+}
+
+start_proxy() {
+    check_dependencies
+
+    if [ -f "$PID_FILE" ]; then
+        if kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            echo "[!] 代理已经在运行 (PID: $(cat "$PID_FILE"))。"
+            return
+        else
+            echo "[!] 检测到残留的 PID 文件，正在清理..."
+            rm -f "$PID_FILE" "$STATE_FILE"
+        fi
+    fi
+
+    SERVER_IP=$(resolve_server_ip)
+
+    SOCKS_PROXY=${RAW_PROXY/$SERVER_HOST/$SERVER_IP}
+
+    echo "[+] 启动 tun2socks (后台)..."
+    nohup tun2socks -device "$TUN_DEV" -proxy "$SOCKS_PROXY" -interface "$ORIGINAL_INTERFACE" -loglevel warn >/dev/null 2>&1 &
+    NEW_PID=$!
+
+    sleep 1
+    if ! kill -0 "$NEW_PID" 2>/dev/null; then
+        echo "[X] 启动失败，进程已退出。"
+        exit 1
+    fi
+
+    echo "$NEW_PID" > "$PID_FILE"
+    {
+        echo "SERVER_IP=$SERVER_IP"
+    } > "$STATE_FILE"
+
+    echo "[+] 配置网卡与路由..."
+    ensure_tun_device
+    ip addr flush dev "$TUN_DEV" 2>/dev/null
+    ip addr add "$TUN_ADDR"/24 dev "$TUN_DEV"
+    ip link set "$TUN_DEV" up
+
+    ip route add "$SERVER_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE"
+    echo "[+] 添加策略路由保护 SSH (端口 22)..."
+    ip rule add sport 22 lookup main priority 1000
+
+    echo "[+] 添加局域网直连规则..."
+    ip route add 192.168.0.0/16 via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    ip route add 10.0.0.0/8 via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    ip route add 172.16.0.0/12 via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    ip route add 0.0.0.0/1 dev "$TUN_DEV"
+    ip route add 128.0.0.0/1 dev "$TUN_DEV"
+
+    echo ">>> 代理已启动 (PID: $NEW_PID)"
+    echo ">>> 使用 'sudo $0 stop' 关闭代理。"
+}
+
+debug_proxy() {
+    check_dependencies
+
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        echo "[!] 检测到后台代理正在运行 (PID: $(cat "$PID_FILE"))，请先执行 stop。"
+        exit 1
+    fi
+
+    SERVER_IP=$(resolve_server_ip)
+    SOCKS_PROXY=${RAW_PROXY/$SERVER_HOST/$SERVER_IP}
+
+    cleanup_debug() {
+        if [ "${DEBUG_CLEANED:-0}" -eq 1 ]; then
+            return
+        fi
+        DEBUG_CLEANED=1
+        echo
+        echo "[+] 正在停止调试进程..."
+        if [ -n "$DEBUG_PID" ]; then
+            kill "$DEBUG_PID" 2>/dev/null
+        fi
+
+        echo "[+] 清理路由规则..."
+        ip route del 0.0.0.0/1 dev "$TUN_DEV" 2>/dev/null
+        ip route del 128.0.0.0/1 dev "$TUN_DEV" 2>/dev/null
+        ip route del "$SERVER_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+        while ip rule show | grep -q "sport 22"; do
+            ip rule del sport 22 lookup main
+        done
+        ip addr flush dev "$TUN_DEV" 2>/dev/null
+        ip link set "$TUN_DEV" down 2>/dev/null
+        echo ">>> 已清理，退出调试模式。"
+    }
+
+    trap cleanup_debug INT TERM EXIT
+
+    echo "[+] 启动 tun2socks (前台模式)..."
+    tun2socks -device "$TUN_DEV" -proxy "$SOCKS_PROXY" -interface "$ORIGINAL_INTERFACE" -loglevel debug &
+    DEBUG_PID=$!
+
+    echo "[+] 等待 tun2socks 初始化设备..."
+    sleep 2
+
+    if ! kill -0 "$DEBUG_PID" 2>/dev/null; then
+        echo "[X] tun2socks 启动失败，请检查上方输出。"
+        exit 1
+    fi
+
+    echo "[+] 配置网卡与路由..."
+    ensure_tun_device
+    ip addr flush dev "$TUN_DEV" 2>/dev/null
+    ip addr add "$TUN_ADDR"/24 dev "$TUN_DEV"
+    ip link set "$TUN_DEV" up
+
+    ip route add "$SERVER_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE"
+    echo "[+] 添加策略路由保护 SSH (端口 22)..."
+    ip rule add sport 22 lookup main priority 1000
+
+    echo "[+] 添加局域网直连规则..."
+    ip route add 192.168.0.0/16 via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    ip route add 10.0.0.0/8 via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    ip route add 172.16.0.0/12 via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    ip route add 0.0.0.0/1 dev "$TUN_DEV"
+    ip route add 128.0.0.0/1 dev "$TUN_DEV"
+
+    echo ">>> 调试运行中，按 Ctrl+C 退出..."
+    wait "$DEBUG_PID"
+    cleanup_debug
+    trap - INT TERM EXIT
+}
+
+install_tool() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "[X] 安装需要 Root 权限，请使用 sudo。"
+        exit 1
+    fi
+
+    check_dependencies
+
+    cp "$0" "$INSTALL_PATH"
+    chmod +x "$INSTALL_PATH"
+    echo "[+] 安装成功，可用: sudo $TOOL_NAME start"
+}
+
+uninstall_tool() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "[X] 卸载需要 Root 权限。"
+        exit 1
+    fi
+
+    if [ -f "$PID_FILE" ]; then
+        stop_proxy
+    fi
+
+    rm -f "$INSTALL_PATH"
+    echo "[+] 已卸载。"
+}
+
+stop_proxy() {
+    if [ ! -f "$PID_FILE" ]; then
+        echo "[!] 代理似乎未运行 (找不到 PID 文件)。"
+        ip link set "$TUN_DEV" down 2>/dev/null
+        ip addr flush dev "$TUN_DEV" 2>/dev/null
+        return
+    fi
+
+    PID=$(cat "$PID_FILE")
+    if [ -f "$STATE_FILE" ]; then
+        # shellcheck source=/dev/null
+        source "$STATE_FILE"
+    fi
+
+    echo "[+] 正在停止代理 (PID: $PID)..."
+    kill "$PID" 2>/dev/null
+
+    echo "[+] 清理路由规则..."
+    ip route del 0.0.0.0/1 dev "$TUN_DEV" 2>/dev/null
+    ip route del 128.0.0.0/1 dev "$TUN_DEV" 2>/dev/null
+    if [ -n "$SERVER_IP" ]; then
+        ip route del "$SERVER_IP" via "$ORIGINAL_GATEWAY" dev "$ORIGINAL_INTERFACE" 2>/dev/null
+    fi
+
+    echo "[+] 清理策略路由..."
+    while ip rule show | grep -q "sport 22"; do
+        ip rule del sport 22 lookup main
+    done
+
+    ip addr flush dev "$TUN_DEV" 2>/dev/null
+    ip link set "$TUN_DEV" down 2>/dev/null
+
+    rm -f "$PID_FILE" "$STATE_FILE"
+    echo ">>> 代理已关闭，网络已还原。"
+}
+
+status_proxy() {
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        echo "[+] 代理正在运行 (PID: $(cat "$PID_FILE"))"
+    else
+        echo "[!] 代理未运行"
+    fi
+}
+
+case "$1" in
+    install)
+        install_tool
+        ;;
+    uninstall)
+        uninstall_tool
+        ;;
+    start)
+        start_proxy
+        ;;
+    stop)
+        stop_proxy
+        ;;
+    restart)
+        stop_proxy
+        sleep 1
+        start_proxy
+        ;;
+    status)
+        status_proxy
+        ;;
+    debug)
+        debug_proxy
+        ;;
+    *)
+        echo "用法: sudo $0 {install|uninstall|start|stop|restart|status|debug}"
+        exit 1
+        ;;
+esac
