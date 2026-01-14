@@ -1,11 +1,12 @@
 #!/bin/bash
 
 # ==========================================
-# 用户环境加载脚本
+# 用户环境加载脚本 (修复版 v3.0)
 # 功能：
 # 1. 将用户加入共享组并创建链接
 # 2. 配置 subuid/subgid (Docker 需要)
 # 3. 切换到用户身份自动安装 Brew 和 Rootless Docker
+# 修复：Systemd 连接竞态，增加等待逻辑
 # ==========================================
 
 # 检测是否为 Root 身份
@@ -18,10 +19,22 @@ fi
 TARGET_USER=$1
 SHARE_GROUP="devteam"
 SHARE_DIR="/home/share"
+CACHE_DIR="/opt/dev-cache"
+
+# 自动寻找缓存的 Docker 包（主程序 + Rootless 扩展）
+DOCKER_MAIN=$(find $CACHE_DIR -name "docker-*.tgz" | grep -v rootless | sort -V | tail -n 1)
+DOCKER_EXTRAS=$(find $CACHE_DIR -name "docker-rootless-extras-*.tgz" | sort -V | tail -n 1)
 
 # 检查参数
 if [ -z "$TARGET_USER" ]; then
     echo "用法: sudo ./user_onboard.sh <username>"
+    exit 1
+fi
+
+# 检查缓存
+if [ ! -d "$CACHE_DIR/homebrew.git" ] || [ -z "$DOCKER_MAIN" ] || [ -z "$DOCKER_EXTRAS" ]; then
+    echo -e "\033[31m[错误] 未找到本地缓存！\033[0m"
+    echo "请先运行 setup_server.sh 进行系统初始化和缓存下载。"
     exit 1
 fi
 
@@ -33,10 +46,11 @@ if ! id "$TARGET_USER" &>/dev/null; then
     passwd "$TARGET_USER"
 fi
 
-# 预先开启 linger，确保用户级 systemd 可用
-echo ">>> [0/3] 启用用户 linger..."
+# 预先开启 linger，确保用户级 systemd 可用（先重置再启用，避免残留状态）
+echo ">>> [0/3] 初始化用户 linger..."
+loginctl disable-linger "$TARGET_USER" >/dev/null 2>&1
 loginctl enable-linger "$TARGET_USER"
-sleep 1
+sleep 2
 
 echo ">>> [1/3] 配置用户权限和共享目录..."
 # 添加用户到共享组
@@ -61,7 +75,7 @@ fi
 
 echo ">>> [3/3] 切换身份为 $TARGET_USER 进行软件安装..."
 # 使用 sudo -u -i 模拟用户登录环境执行安装
-sudo -u "$TARGET_USER" -i bash << 'EOF'
+sudo -u "$TARGET_USER" -i DOCKER_MAIN="$DOCKER_MAIN" DOCKER_EXTRAS="$DOCKER_EXTRAS" CACHE_DIR="$CACHE_DIR" bash << 'EOF'
     # ----------------------------------------
     # 以下命令以 目标用户 身份运行
     # ----------------------------------------
@@ -72,13 +86,28 @@ sudo -u "$TARGET_USER" -i bash << 'EOF'
     export XDG_RUNTIME_DIR=/run/user/$(id -u)
     export DBUS_SESSION_BUS_ADDRESS=unix:path=${XDG_RUNTIME_DIR}/bus
 
-    # 1. 安装 Homebrew (如果不存在)
-    # 使用 Git clone 方式，避免需要额外权限
+    # 等待 systemd bus socket 就绪，解决连接被拒绝问题
+    echo "--> 等待 Systemd Bus Socket 就绪..."
+    TIMEOUT=0
+    while [ ! -S "${XDG_RUNTIME_DIR}/bus" ]; do
+        if [ $TIMEOUT -gt 10 ]; then
+            echo "错误: Systemd 用户服务启动超时！"
+            echo "调试: $(ls -ld ${XDG_RUNTIME_DIR} 2>&1)"
+            exit 1
+        fi
+        sleep 1
+        echo "    ... (${TIMEOUT}s)"
+        TIMEOUT=$((TIMEOUT+1))
+    done
+    echo "--> Systemd 已连接。"
+
+    # 1. 安装 Homebrew (使用本地缓存)
+    # 使用 Git clone 方式，避免需要额外权限和外网
     if [ ! -d "$HOME/.linuxbrew" ]; then
-        echo "--> 正在为用户安装 Homebrew (git clone)..."
-        git clone https://github.com/Homebrew/brew "$HOME/.linuxbrew"
+        echo "--> 正在为用户安装 Homebrew (缓存克隆)..."
+        git clone "$CACHE_DIR/homebrew.git" "$HOME/.linuxbrew"
+        git -C "$HOME/.linuxbrew" remote set-url origin https://github.com/Homebrew/brew
         eval "$($HOME/.linuxbrew/bin/brew shellenv)"
-        brew update --force --quiet
 
         if ! grep -q "brew shellenv" "$HOME/.bashrc"; then
             echo '# Homebrew 配置' >> "$HOME/.bashrc"
@@ -94,21 +123,30 @@ sudo -u "$TARGET_USER" -i bash << 'EOF'
     mkdir -p $HOME/bin
     export PATH=$HOME/bin:$PATH
 
-    # 官方脚本会自动检测并安装 dockerd-rootless
-    curl -fsSL https://get.docker.com/rootless | sh
+    if ! systemctl --user is-active --quiet docker; then
+        # 解压主程序（包含 docker 客户端）
+        tar -xzf "$DOCKER_MAIN" -C "$HOME/bin" --strip-components=1
+        # 解压 rootless 扩展
+        tar -xzf "$DOCKER_EXTRAS" -C "$HOME/bin" --strip-components=1
 
-    # 将 rootless 运行所需 PATH/DOCKER_HOST 持久化
-    if ! grep -q "DOCKER_HOST" "$HOME/.bashrc"; then
-        echo '# Docker Rootless 配置' >> "$HOME/.bashrc"
-        echo 'export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH' >> "$HOME/.bashrc"
-        echo 'export PATH=$HOME/bin:$PATH' >> "$HOME/.bashrc"
-        echo "export DOCKER_HOST=unix://${XDG_RUNTIME_DIR}/docker.sock" >> "$HOME/.bashrc"
+        if command -v dockerd-rootless-setuptool.sh > /dev/null 2>&1; then
+            dockerd-rootless-setuptool.sh install --skip-iptables
+        else
+            echo "dockerd-rootless-setuptool.sh 未找到，安装失败" >&2
+            exit 1
+        fi
+
+        if ! grep -q "DOCKER_HOST" "$HOME/.bashrc"; then
+            echo '# Docker Rootless 配置' >> "$HOME/.bashrc"
+            echo 'export PATH=$HOME/bin:$PATH' >> "$HOME/.bashrc"
+            echo "export DOCKER_HOST=unix://${XDG_RUNTIME_DIR}/docker.sock" >> "$HOME/.bashrc"
+        fi
+
+        systemctl --user enable docker
+        systemctl --user start docker
+    else
+        echo "--> Docker 已在运行，跳过安装。"
     fi
-
-    # 3. 设置 Docker 开机自启 (用户级 systemd)
-    # 注意：这需要系统开启 lingering
-    systemctl --user enable docker
-    systemctl --user start docker
 
     echo "--> 用户配置完成！"
 EOF

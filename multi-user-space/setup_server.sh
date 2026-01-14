@@ -6,6 +6,7 @@
 # 1. 安装 Brew 和 Docker 的系统依赖
 # 2. 拦截普通用户的 apt 命令
 # 3. 创建协作共享目录
+# 4. 预下载 Homebrew / Docker 资源到本地缓存
 # ==========================================
 
 # 检测是否为 Root 身份
@@ -20,15 +21,17 @@ set -e
 # 定义共享组和目录
 SHARE_GROUP="devteam"
 SHARE_DIR="/home/share"
+CACHE_DIR="/opt/dev-cache"
+DOCKER_VERSION="29.1.4"
 
-echo ">>> [1/4] 更新系统并安装基础依赖..."
+echo ">>> [1/5] 更新系统并安装基础依赖..."
 apt-get update
 # 安装编译环境、Rootless Docker 依赖 (uidmap, dbus-user-session)
 apt-get install -y build-essential curl file git \
     uidmap dbus-user-session fuse-overlayfs iptables \
     slirp4netns
 
-echo ">>> [2/4] 配置全局 Shell 环境 (拦截 apt, 预设路径)..."
+echo ">>> [2/5] 配置全局 Shell 环境 (拦截 apt, 预设路径)..."
 # 创建一个全局 profile 脚本，所有用户登录时都会加载
 cat > /etc/profile.d/99-dev-env.sh << 'EOF'
 # 拦截 apt 和 apt-get
@@ -56,7 +59,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 EOF
 
-echo ">>> [3/4] 创建共享协作目录..."
+echo ">>> [3/5] 创建共享协作目录..."
 # 创建组
 if ! getent group $SHARE_GROUP > /dev/null; then
     groupadd $SHARE_GROUP
@@ -70,5 +73,44 @@ chown root:$SHARE_GROUP $SHARE_DIR
 # 770: 属主和组可读写执行，其他人无权访问
 chmod 2770 $SHARE_DIR
 
-echo ">>> [4/4] 准备完成。请使用 'user_onboard.sh' 脚本添加或配置用户。"
-echo "系统初始化完毕！"
+echo ">>> [4/5] 建立本地资源缓存..."
+mkdir -p $CACHE_DIR
+
+# 4.1 缓存 Homebrew (bare clone)
+if [ ! -d "$CACHE_DIR/homebrew.git" ]; then
+    echo "--> 正在下载 Homebrew 核心库 (bare clone)..."
+    git clone --bare --depth=1 https://github.com/Homebrew/brew.git "$CACHE_DIR/homebrew.git"
+else
+    echo "--> Homebrew 缓存已存在，正在更新..."
+    git --git-dir="$CACHE_DIR/homebrew.git" fetch origin master:master
+fi
+
+# [新增修复] 告诉系统级 Git 信任这个缓存目录，避免 "detected dubious ownership"
+if ! git config --system --get-all safe.directory | grep -q "$CACHE_DIR/homebrew.git"; then
+    echo "--> 配置 Git 全局信任列表..."
+    git config --system --add safe.directory "$CACHE_DIR/homebrew.git"
+fi
+
+# 4.2 缓存 Docker 主程序 (包含 docker 客户端)
+DOCKER_MAIN_FILE="docker-${DOCKER_VERSION}.tgz"
+if [ ! -f "$CACHE_DIR/$DOCKER_MAIN_FILE" ]; then
+    echo "--> 正在下载 Docker 主程序包 (v${DOCKER_VERSION})..."
+    curl -L -o "$CACHE_DIR/$DOCKER_MAIN_FILE" \
+        "https://download.docker.com/linux/static/stable/x86_64/${DOCKER_MAIN_FILE}"
+else
+    echo "--> Docker 主程序包缓存已存在。"
+fi
+
+# 4.3 缓存 Docker Rootless Binaries (extras)
+DOCKER_EXTRAS_FILE="docker-rootless-extras-${DOCKER_VERSION}.tgz"
+if [ ! -f "$CACHE_DIR/$DOCKER_EXTRAS_FILE" ]; then
+    echo "--> 正在下载 Docker Rootless 扩展包 (v${DOCKER_VERSION})..."
+    curl -L -o "$CACHE_DIR/$DOCKER_EXTRAS_FILE" \
+        "https://download.docker.com/linux/static/stable/x86_64/${DOCKER_EXTRAS_FILE}"
+else
+    echo "--> Docker Rootless 扩展包缓存已存在。"
+fi
+
+chmod -R 755 $CACHE_DIR
+
+echo ">>> [5/5] 系统初始化完成！缓存已就绪。"
