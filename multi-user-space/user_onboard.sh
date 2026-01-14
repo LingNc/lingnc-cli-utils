@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# 用户环境加载脚本 (修复版 v3.0)
+# 用户环境加载脚本
 # 功能：
 # 1. 将用户加入共享组并创建链接
 # 2. 配置 subuid/subgid (Docker 需要)
@@ -101,22 +101,30 @@ sudo -u "$TARGET_USER" -i DOCKER_MAIN="$DOCKER_MAIN" DOCKER_EXTRAS="$DOCKER_EXTR
     done
     echo "--> Systemd 已连接。"
 
-    # 1. 安装 Homebrew (使用本地缓存)
-    # 使用 Git clone 方式，避免需要额外权限和外网
-    if [ ! -d "$HOME/.linuxbrew" ]; then
-        echo "--> 正在为用户安装 Homebrew (缓存克隆)..."
-        git clone "$CACHE_DIR/homebrew.git" "$HOME/.linuxbrew"
-        git -C "$HOME/.linuxbrew" remote set-url origin https://github.com/Homebrew/brew
-        eval "$($HOME/.linuxbrew/bin/brew shellenv)"
+      # 1. 安装 Homebrew (使用本地缓存 + 清华源)
+      # 使用 Git clone 方式，避免需要额外权限和外网
+      if [ ! -d "$HOME/.linuxbrew" ]; then
+          echo "--> 正在为用户安装 Homebrew (缓存克隆)..."
+          git clone "$CACHE_DIR/homebrew.git" "$HOME/.linuxbrew"
+          # 切换远程到清华源，加速后续 brew update
+          git -C "$HOME/.linuxbrew" remote set-url origin https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git
 
-        if ! grep -q "brew shellenv" "$HOME/.bashrc"; then
-            echo '# Homebrew 配置' >> "$HOME/.bashrc"
-            echo "eval \"\$($HOME/.linuxbrew/bin/brew shellenv)\"" >> "$HOME/.bashrc"
-        fi
-    else
-        eval "$($HOME/.linuxbrew/bin/brew shellenv)"
-        echo "--> Homebrew 已安装，跳过。"
-    fi
+          eval "$($HOME/.linuxbrew/bin/brew shellenv)"
+
+          # 写入清华镜像配置与 shellenv
+          cat >> "$HOME/.bashrc" << 'VARS'
+# Homebrew Mirror Settings
+export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git"
+export HOMEBREW_CORE_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/homebrew-core.git"
+export HOMEBREW_API_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/api"
+export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles"
+export HOMEBREW_PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+eval "\$($HOME/.linuxbrew/bin/brew shellenv)"
+VARS
+      else
+          eval "$($HOME/.linuxbrew/bin/brew shellenv)"
+          echo "--> Homebrew 已安装，跳过。"
+      fi
 
     # 2. 安装/启动 Rootless Docker（不重复安装系统 Docker 客户端）
     echo "--> 配置 Rootless Docker..."
