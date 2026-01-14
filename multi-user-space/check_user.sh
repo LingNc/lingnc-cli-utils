@@ -17,7 +17,7 @@ fi
 echo "=== 正在检查用户 $TARGET_USER 的开发环境 ==="
 
 # 1. 检查 Homebrew
-echo -n "[1/3] 检查 Homebrew... "
+echo -n "[1/4] 检查 Homebrew... "
 BREW_VERSION=$(sudo -u "$TARGET_USER" -i bash -c 'source ~/.bashrc; brew --version 2>/dev/null | head -n 1')
 if [[ $BREW_VERSION == *"Homebrew"* ]]; then
     echo -e "\033[32m成功\033[0m ($BREW_VERSION)"
@@ -26,7 +26,7 @@ else
 fi
 
 # 2. 检查 Docker 守护进程连接（不拉取外网镜像）
-echo -n "[2/3] 检查 Docker 守护进程... "
+echo -n "[2/4] 检查 Docker 守护进程... "
 DOCKER_INFO=$(sudo -u "$TARGET_USER" -i bash -c 'docker info 2>/dev/null')
 if [ $? -eq 0 ]; then
     echo -e "\033[32m成功\033[0m (Daemon 响应正常)"
@@ -37,12 +37,24 @@ else
 fi
 
 # 3. 检查共享目录写权限
-echo -n "[3/3] 检查共享目录权限... "
+echo -n "[3/4] 检查共享目录权限... "
 SHARE_TEST=$(sudo -u "$TARGET_USER" -i bash -c 'touch ~/share-workspace/.perm_check && rm ~/share-workspace/.perm_check && echo ok')
 if [ "$SHARE_TEST" == "ok" ]; then
     echo -e "\033[32m成功\033[0m (可写)"
 else
     echo -e "\033[31m失败\033[0m (无法写入 ~/share-workspace)"
+fi
+
+# 4. 检查 APT 拦截策略
+echo -n "[4/4] 检查 APT 拦截策略... "
+APT_CHECK=$(sudo -u "$TARGET_USER" -i bash -c 'source ~/.bashrc; type apt 2>/dev/null')
+
+if [[ "$APT_CHECK" == *"function"* ]]; then
+    echo -e "\033[32m成功\033[0m (已拦截)"
+else
+    echo -e "\033[31m失败\033[0m (未拦截)"
+    echo "      诊断信息: $APT_CHECK"
+    echo "      建议: 检查 user_onboard.sh 是否正确将拦截函数写入了 ~/.bashrc"
 fi
 
 echo "=== 检查结束 ==="

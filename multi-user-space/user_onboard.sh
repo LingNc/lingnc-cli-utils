@@ -119,7 +119,10 @@ export HOMEBREW_CORE_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebr
 export HOMEBREW_API_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/api"
 export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles"
 export HOMEBREW_PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
-eval "\$($HOME/.linuxbrew/bin/brew shellenv)"
+eval "$($HOME/.linuxbrew/bin/brew shellenv)"
+if [ -f /etc/profile.d/99-dev-env.sh ]; then
+    . /etc/profile.d/99-dev-env.sh
+fi
 VARS
       else
           eval "$($HOME/.linuxbrew/bin/brew shellenv)"
