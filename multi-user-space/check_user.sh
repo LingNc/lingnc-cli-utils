@@ -47,13 +47,18 @@ fi
 
 # 4. 检查 APT 拦截策略
 echo -n "[4/4] 检查 APT 拦截策略... "
-APT_CHECK=$(sudo -u "$TARGET_USER" -i bash -c 'source ~/.bashrc; type apt 2>/dev/null')
 
-if [[ "$APT_CHECK" == *"function"* ]]; then
+# 关键修改：加入 -i 参数强制进入交互模式，这样 .bashrc 才会完整加载
+# 2>/dev/null 用于屏蔽因为没有真实 TTY 而产生的 "job control" 警告
+APT_TYPE=$(sudo -u "$TARGET_USER" -i bash -i -c 'source ~/.bashrc; type -t apt' 2>/dev/null)
+
+if [ "$APT_TYPE" = "function" ]; then
     echo -e "\033[32m成功\033[0m (已拦截)"
 else
     echo -e "\033[31m失败\033[0m (未拦截)"
-    echo "      诊断信息: $APT_CHECK"
+    # 同样加上 -i 参数来获取诊断信息
+    APT_DESC=$(sudo -u "$TARGET_USER" -i bash -i -c 'source ~/.bashrc; type apt' 2>/dev/null)
+    echo "      诊断信息: $APT_DESC"
     echo "      建议: 检查 user_onboard.sh 是否正确将拦截函数写入了 ~/.bashrc"
 fi
 
