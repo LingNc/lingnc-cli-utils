@@ -76,6 +76,16 @@ load_messages() {
         MSG[INFO_DOCKER_REMOVED]="Docker 已移除"
         MSG[WARN_DOCKER_INACTIVE]="Docker 服务未运行"
         MSG[INFO_DOCKER_ACTIVE]="Docker 服务运行中"
+        MSG[INFO_DOCKER_DAEMON_OK]="Docker 守护进程可用"
+        MSG[WARN_DOCKER_DAEMON_FAIL]="无法连接 Docker 守护进程"
+        MSG[WARN_DOCKER_SETUPTOOL_MISSING]="未找到 dockerd-rootless-setuptool.sh，Docker rootless 安装失败"
+
+        MSG[WARN_SYSTEMD_USER_TIMEOUT]="Systemd 用户服务启动超时 (%ss) - 可能会导致 Docker 连接失败"
+        MSG[INFO_BREW_VERSION]="brew: %s"
+        MSG[INFO_APT_INTERCEPTED]="apt: [已拦截] （系统保护已启用）"
+        MSG[WARN_APT_NOT_INTERCEPTED]="apt: [未拦截] （警告：apt 未被拦截）"
+        MSG[INFO_SHARE_WRITE_OK]="共享目录写权限正常"
+        MSG[WARN_SHARE_WRITE_FAIL]="共享目录不可写"
 
         MSG[WARN_SHARE_NOT_READY]="共享目录未准备，请联系管理员"
         MSG[INFO_SHARE_LINKED]="共享工作区已链接"
@@ -143,6 +153,16 @@ load_messages() {
         MSG[INFO_DOCKER_REMOVED]="Docker removed"
         MSG[WARN_DOCKER_INACTIVE]="Docker service inactive"
         MSG[INFO_DOCKER_ACTIVE]="Docker service active"
+        MSG[INFO_DOCKER_DAEMON_OK]="Docker daemon is reachable"
+        MSG[WARN_DOCKER_DAEMON_FAIL]="Cannot connect to Docker daemon"
+        MSG[WARN_DOCKER_SETUPTOOL_MISSING]="dockerd-rootless-setuptool.sh not found; rootless install failed"
+
+        MSG[WARN_SYSTEMD_USER_TIMEOUT]="Systemd user service startup timeout (%ss) - Docker connection may fail"
+        MSG[INFO_BREW_VERSION]="brew: %s"
+        MSG[INFO_APT_INTERCEPTED]="apt: [intercepted] (System protection active)"
+        MSG[WARN_APT_NOT_INTERCEPTED]="apt: [not intercepted] (Warning: apt is not intercepted)"
+        MSG[INFO_SHARE_WRITE_OK]="Share directory is writable"
+        MSG[WARN_SHARE_WRITE_FAIL]="Share directory is not writable"
 
         MSG[WARN_SHARE_NOT_READY]="Share dir not ready; ask admin"
         MSG[INFO_SHARE_LINKED]="Share workspace linked"
@@ -171,7 +191,7 @@ detect_language
 load_messages
 
 SCRIPT_NAME="multiuser"
-VERSION="0.2.0"
+VERSION="0.2.1"
 AUTHOR="LingNc"
 REPOSITORY="https://github.com/LingNc/lingnc-cli-utils"
 
@@ -198,6 +218,39 @@ require_root() {
     if [ "$(id -u)" -ne 0 ]; then
         error ERR_ROOT_REQUIRED
     fi
+}
+
+# Unified parameter validator
+# Usage: validate_params "cmd" "${1:-}|name1" "${2:-}|name2" ...
+validate_params() {
+    local cmd_name="$1"
+    shift
+
+    while [ $# -gt 0 ]; do
+        local pair="$1"
+        shift
+        local value="${pair%%|*}"
+        local name="${pair#*|}"
+        if [ -z "$value" ]; then
+            error ERR_MISSING_PARAM "${name} (for ${cmd_name})"
+        fi
+    done
+}
+
+# Initialize DBus env for user-level systemd interactions
+init_user_dbus() {
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+
+    local timeout=0
+    while [ ! -S "${XDG_RUNTIME_DIR}/bus" ]; do
+        if [ "$timeout" -gt 10 ]; then
+            warn WARN_SYSTEMD_USER_TIMEOUT "10"
+            break
+        fi
+        sleep 1
+        timeout=$((timeout + 1))
+    done
 }
 
 ensure_config_block() {
@@ -248,21 +301,27 @@ run_as_user() {
 # ---------- system-level setup ----------
 ensure_global_profile() {
     cat >"$GLOBAL_PROFILE" <<'EOF'
-# Managed by multiuser. Do not edit manually.
+# 拦截 apt 和 apt-get
 if [ "$(id -u)" -ne 0 ]; then
     apt() {
-        echo "[Permission Denied] apt is blocked in multiuser environment. Use brew instead." 1>&2
+        echo -e "\033[31m[Permission Denied]\033[0m 你没有系统级软件管理权限."
+        echo -e "   请使用 \033[32mbrew install <package>\033[0m 安装软件给自己使用。"
+        echo -e "   或者联系管理员安装系统级依赖。"
     }
-    apt-get() { apt "$@"; }
+    apt-get() {
+        apt "$@"
+    }
 
+    # 自动加载用户的 Homebrew (如果已安装)
     if [ -d "$HOME/.linuxbrew/bin" ]; then
         eval "$($HOME/.linuxbrew/bin/brew shellenv)"
     elif [ -d "/home/linuxbrew/.linuxbrew/bin" ]; then
         eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
     fi
 
-    if [ -S "$XDG_RUNTIME_DIR/docker.sock" ]; then
-        export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
+    # 自动设置 Docker Rootless Host
+    if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/docker.sock" ]; then
+        export DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/docker.sock"
     fi
 fi
 EOF
@@ -303,7 +362,7 @@ download_docker_archives() {
     local main_pkg="docker-${DOCKER_VERSION}.tgz"
     local extras_pkg="docker-rootless-extras-${DOCKER_EXTRAS_VERSION}.tgz"
 
-    find "$CACHE_DIR" -maxdepth 1 -type f -name 'docker-*.tgz' ! -name "$main_pkg" -delete || true
+    find "$CACHE_DIR" -maxdepth 1 -type f -name 'docker-*.tgz' ! -name 'docker-rootless-extras-*.tgz' ! -name "$main_pkg" -delete || true
     find "$CACHE_DIR" -maxdepth 1 -type f -name 'docker-rootless-extras-*.tgz' ! -name "$extras_pkg" -delete || true
 
     if [ ! -f "$CACHE_DIR/$main_pkg" ]; then
@@ -413,6 +472,12 @@ ensure_user_exists() {
 enable_user_linger() {
     local user="$1"
     loginctl enable-linger "$user" >/dev/null 2>&1 || true
+    sleep 1
+}
+
+disable_user_linger() {
+    local user="$1"
+    loginctl disable-linger "$user" >/dev/null 2>&1 || true
 }
 
 ensure_user_subids() {
@@ -491,30 +556,38 @@ module_install_brew() {
 
     local block_content
     block_content=$(cat <<EOF
+# Homebrew Mirror Settings
 export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git"
 export HOMEBREW_CORE_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/homebrew-core.git"
 export HOMEBREW_API_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/api"
 export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles"
 export HOMEBREW_PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
-if [ -d "$brew_dir/bin" ]; then
-    eval "$($brew_dir/bin/brew shellenv)"
+
+# Load Homebrew ShellEnv
+if [ -x "$brew_dir/bin/brew" ]; then
+    eval "$("$brew_dir/bin/brew" shellenv)"
 fi
-apt() { echo "[Permission Denied] apt blocked; use brew" 1>&2; }
-apt-get() { apt "\$@"; }
+
+# 关键：加载全局配置 (APT 拦截等) - 对应 legacy user_onboard.sh
+if [ -f "$GLOBAL_PROFILE" ]; then
+    . "$GLOBAL_PROFILE"
+fi
 EOF
     )
-
     ensure_config_block "$HOME/.bashrc" "${USER}_BREW" "$block_content"
     info INFO_BREW_CONFIGURED
 }
 
 module_remove_brew() {
-    local confirm
-    local expect="${MSG[BREW_REMOVE_EXPECT]}"
-    read -r -p "$(translate WARN_BREW_REMOVE_PROMPT)" confirm
-    if [ "$confirm" != "$expect" ]; then
+    local prompt
+    local expected
+    local input
+    prompt="$(translate WARN_BREW_REMOVE_PROMPT)"
+    expected="$(translate BREW_REMOVE_EXPECT)"
+    read -r -p "$prompt" input
+    if [ "$input" != "$expected" ]; then
         warn WARN_BREW_REMOVE_ABORT
-        return
+        return 1
     fi
 
     rm -rf "$HOME/.linuxbrew"
@@ -540,8 +613,10 @@ module_update_brew() {
 }
 
 module_check_brew() {
-    if command -v brew >/dev/null 2>&1; then
-        info "brew: $(brew --version | head -n1)"
+    local brew_version
+    brew_version=$(bash -i -c 'source ~/.bashrc; brew --version 2>/dev/null | head -n 1' 2>/dev/null)
+    if [[ "$brew_version" == *"Homebrew"* ]]; then
+        info INFO_BREW_VERSION "$brew_version"
     else
         warn WARN_BREW_MISSING
         return 1
@@ -550,57 +625,68 @@ module_check_brew() {
 
 module_install_docker() {
     require_cache_for_module docker
-    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    init_user_dbus
     mkdir -p "$HOME/bin"
+    export PATH="$HOME/bin:$PATH"
     tar -xzf "$CACHE_DIR/docker-${DOCKER_VERSION}.tgz" -C "$HOME/bin" --strip-components=1
     tar -xzf "$CACHE_DIR/docker-rootless-extras-${DOCKER_EXTRAS_VERSION}.tgz" -C "$HOME/bin" --strip-components=1
 
     if command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
         dockerd-rootless-setuptool.sh install --skip-iptables >/dev/null 2>&1 || true
+    else
+        warn WARN_DOCKER_SETUPTOOL_MISSING
+        return 1
     fi
 
     local block_content
     block_content=$(cat <<'EOF'
 export PATH="$HOME/bin:$PATH"
-export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/docker.sock"
 EOF
     )
     ensure_config_block "$HOME/.bashrc" "${USER}_DOCKER" "$block_content"
 
     systemctl --user enable docker >/dev/null 2>&1 || true
-    systemctl --user start docker >/dev/null 2>&1 || systemctl --user restart docker >/dev/null 2>&1 || true
+    systemctl --user start docker >/dev/null 2>&1 || true
     info INFO_DOCKER_CONFIGURED
 }
 
 module_update_docker() {
     require_cache_for_module docker
-    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    init_user_dbus
     systemctl --user stop docker >/dev/null 2>&1 || true
-    module_install_docker
+    module_install_docker || return 1
     info INFO_DOCKER_REFRESHED
 }
 
 module_remove_docker() {
-    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    init_user_dbus
     systemctl --user stop docker >/dev/null 2>&1 || true
     systemctl --user disable docker >/dev/null 2>&1 || true
     remove_config_block "$HOME/.bashrc" "${USER}_DOCKER"
     rm -f "$HOME/bin/docker" "$HOME/bin/dockerd" "$HOME/bin/docker-init" \
         "$HOME/bin/docker-proxy" "$HOME/bin/docker-compose" "$HOME/bin/containerd" \
-        "$HOME/bin/containerd-shim" "$HOME/bin/ctr" "$HOME/bin/runc" \
-        "$HOME/bin/dockerd-rootless-setuptool.sh" "$HOME/bin/rootlesskit" \
+        "$HOME/bin/containerd-shim" "$HOME/bin/containerd-shim-runc-v2" \
+        "$HOME/bin/ctr" "$HOME/bin/runc" "$HOME/bin/dockerd-rootless-setuptool.sh" \
+        "$HOME/bin/dockerd-rootless.sh" "$HOME/bin/rootlesskit" \
         "$HOME/bin/rootlesskit-docker-proxy" "$HOME/bin/vpnkit"
     info INFO_DOCKER_REMOVED
 }
 
 module_check_docker() {
-    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-    if systemctl --user is-active --quiet docker; then
-        info INFO_DOCKER_ACTIVE
-    else
-        warn WARN_DOCKER_INACTIVE
-        return 1
+    init_user_dbus
+    if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -z "${DOCKER_HOST:-}" ]; then
+        export DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/docker.sock"
     fi
+    if docker info >/dev/null 2>&1; then
+        info INFO_DOCKER_DAEMON_OK
+        return 0
+    fi
+
+    warn WARN_DOCKER_DAEMON_FAIL
+    systemctl --user status docker --no-pager 2>/dev/null | head -n 3 || true
+    return 1
 }
 
 module_install_share() {
@@ -622,8 +708,30 @@ module_remove_share() {
 module_check_share() {
     if [ -d "$HOME/share-workspace" ] || [ -L "$HOME/share-workspace" ]; then
         info INFO_SHARE_AVAILABLE
+        if touch "$HOME/share-workspace/.perm_check" 2>/dev/null; then
+            rm -f "$HOME/share-workspace/.perm_check" || true
+            info INFO_SHARE_WRITE_OK
+        else
+            warn WARN_SHARE_WRITE_FAIL
+            return 1
+        fi
     else
         warn WARN_SHARE_MISSING
+        return 1
+    fi
+}
+
+module_check_apt() {
+    local apt_type
+    apt_type=$(bash -i -c 'source ~/.bashrc; type -t apt' 2>/dev/null)
+    if [ "$apt_type" = "function" ]; then
+        info INFO_APT_INTERCEPTED
+    else
+        warn WARN_APT_NOT_INTERCEPTED
+        local apt_desc
+        apt_desc=$(bash -i -c 'source ~/.bashrc; type apt' 2>/dev/null)
+        printf "      诊断信息: %s\n" "$apt_desc"
+        printf "      建议: 检查 user_onboard.sh 是否正确将拦截函数写入了 ~/.bashrc\n"
         return 1
     fi
 }
@@ -672,7 +780,6 @@ module_remove() {
         *) error ERR_UNKNOWN_MODULE "$module" ;;
     esac
 }
-
 module_check() {
     local module="$1"
     local rc=0
@@ -681,6 +788,7 @@ module_check() {
             module_check_brew || rc=1
             module_check_docker || rc=1
             module_check_share || rc=1
+            module_check_apt || rc=1
             ;;
         brew) module_check_brew || rc=1 ;;
         docker) module_check_docker || rc=1 ;;
@@ -693,7 +801,7 @@ module_check() {
 # ---------- docker shortcuts ----------
 docker_service_action() {
     local action="$1"
-    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    init_user_dbus
     case "$action" in
         status)
             systemctl --user status docker --no-pager
@@ -775,21 +883,18 @@ uninstall_self() {
 }
 
 handle_module_command() {
-    local action="$1"
-    local module="$2"
-    [ -n "$action" ] || error ERR_MISSING_PARAM "module action"
-    [ -n "$module" ] || error ERR_MISSING_PARAM "module name"
-    shift 2
+    local action="${1:-}"
+    local module="${2:-}"
+    validate_params "module" "${action}|action" "${module}|module"
+    shift 2 || true
     local target_user="$USER"
 
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "${1:-}" in
             --user)
-                target_user="$2"
-                shift 2
-                ;;
-            *)
-                error ERR_UNKNOWN_OPTION "$1"
+                target_user="${2:-}"
+                [ -n "$target_user" ] || error ERR_MISSING_PARAM "user name"
+
                 ;;
         esac
     done
@@ -798,6 +903,9 @@ handle_module_command() {
         [ -n "$target_user" ] || error WARN_USER_REQUIRED
         prepare_target_user "$target_user" "$module"
         run_as_user "$target_user" module "$action" "$module"
+        if [ "$action" = "remove" ] && { [ "$module" = "all" ] || [ "$module" = "docker" ]; }; then
+            disable_user_linger "$target_user"
+        fi
         return
     fi
 
@@ -813,12 +921,10 @@ handle_module_command() {
 
 handle_config_command() {
     require_root
-    local user="$1"
-    local action="$2"
-    local module="$3"
-    [ -n "$user" ] || error ERR_MISSING_PARAM "user"
-    [ -n "$action" ] || error ERR_MISSING_PARAM "action"
-    [ -n "$module" ] || error ERR_MISSING_PARAM "module"
+    local user="${1:-}"
+    local action="${2:-}"
+    local module="${3:-all}"
+    validate_params "config" "${user}|username" "${action}|action"
 
     case "$action" in
         install|update|remove|check) : ;;
@@ -831,13 +937,16 @@ handle_config_command() {
 
     prepare_target_user "$user" "$module"
     run_as_user "$user" module "$action" "$module"
+    if [ "$action" = "remove" ] && { [ "$module" = "all" ] || [ "$module" = "docker" ]; }; then
+        disable_user_linger "$user"
+    fi
 }
 
 handle_create_command() {
     require_root
-    local user="$1"
-    shift
-    [ -n "$user" ] || error ERR_MISSING_PARAM "user"
+    local user="${1:-}"
+    shift || true
+    validate_params "create" "${user}|user"
 
     local with_docker=false
     local with_brew=false
@@ -870,12 +979,17 @@ handle_create_command() {
 }
 
 handle_docker_shortcut() {
-    local action="$1"
+    local action="${1:-}"
+    [ -n "$action" ] || error ERR_MISSING_PARAM "action"
     local target_user="$USER"
-    shift
+    shift || true
     while [ $# -gt 0 ]; do
-        case "$1" in
-            --user) target_user="$2"; shift 2 ;;
+        case "${1:-}" in
+            --user)
+                target_user="${2:-}"
+                [ -n "$target_user" ] || error ERR_MISSING_PARAM "user name"
+                shift 2 || true
+                ;;
             *) error ERR_UNKNOWN_OPTION "$1" ;;
         esac
     done
