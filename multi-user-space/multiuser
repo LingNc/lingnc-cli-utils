@@ -94,6 +94,30 @@ load_messages() {
         MSG[INFO_SHARE_AVAILABLE]="共享工作区可用"
         MSG[INFO_INSTALLED_PATH]="已安装到 %s"
         MSG[INFO_UNINSTALLED]="已卸载 %s"
+
+        MSG[LIST_SYS_TITLE]="[系统资源清单]"
+        MSG[LIST_USER_TITLE]="[用户资产清单: %s]"
+        MSG[LIST_ITEM_GLOBAL_PROFILE]="全局 Profile"
+        MSG[LIST_ITEM_CACHE_DIR]="缓存目录"
+        MSG[LIST_ITEM_BREW_REPO]="Homebrew 仓库"
+        MSG[LIST_ITEM_DOCKER_IMAGES]="Docker 缓存包"
+        MSG[LIST_ITEM_SHARE_DIR]="共享目录"
+        MSG[LIST_ITEM_LINGER]="Linger 状态"
+        MSG[LIST_ITEM_BREW]="Homebrew"
+        MSG[LIST_ITEM_DOCKER]="Docker"
+        MSG[LIST_ITEM_DOCKER_SERVICE]="Docker 服务"
+        MSG[LIST_ITEM_SHARE_LINK]="共享链接"
+        MSG[LIST_ITEM_APT_GUARD]="APT 拦截"
+
+        MSG[STATUS_INSTALLED]="已安装"
+        MSG[STATUS_MISSING]="未安装/不存在"
+        MSG[STATUS_ENABLED]="已启用"
+        MSG[STATUS_DISABLED]="未启用"
+        MSG[STATUS_ACTIVE]="运行中"
+        MSG[STATUS_INACTIVE]="停止"
+        MSG[STATUS_UNKNOWN]="未知"
+        MSG[STATUS_LINKED]="已链接 -> %s"
+        MSG[STATUS_UNLINKED]="未链接"
     else
         MSG[ERR_ROOT_REQUIRED]="Root privileges required!"
         MSG[ERR_MISSING_CMD]="Command not found: %s"
@@ -171,6 +195,30 @@ load_messages() {
         MSG[INFO_SHARE_AVAILABLE]="Share workspace available"
         MSG[INFO_INSTALLED_PATH]="Installed to %s"
         MSG[INFO_UNINSTALLED]="Uninstalled %s"
+
+        MSG[LIST_SYS_TITLE]="[System Resource List]"
+        MSG[LIST_USER_TITLE]="[User Assets: %s]"
+        MSG[LIST_ITEM_GLOBAL_PROFILE]="Global Profile"
+        MSG[LIST_ITEM_CACHE_DIR]="Cache Directory"
+        MSG[LIST_ITEM_BREW_REPO]="Homebrew Repo"
+        MSG[LIST_ITEM_DOCKER_IMAGES]="Docker Cached Images"
+        MSG[LIST_ITEM_SHARE_DIR]="Share Directory"
+        MSG[LIST_ITEM_LINGER]="Linger State"
+        MSG[LIST_ITEM_BREW]="Homebrew"
+        MSG[LIST_ITEM_DOCKER]="Docker"
+        MSG[LIST_ITEM_DOCKER_SERVICE]="Docker Service"
+        MSG[LIST_ITEM_SHARE_LINK]="Share Link"
+        MSG[LIST_ITEM_APT_GUARD]="APT Intercept"
+
+        MSG[STATUS_INSTALLED]="Installed"
+        MSG[STATUS_MISSING]="Missing/Not Found"
+        MSG[STATUS_ENABLED]="Enabled"
+        MSG[STATUS_DISABLED]="Disabled"
+        MSG[STATUS_ACTIVE]="Active"
+        MSG[STATUS_INACTIVE]="Inactive"
+        MSG[STATUS_UNKNOWN]="Unknown"
+        MSG[STATUS_LINKED]="Linked -> %s"
+        MSG[STATUS_UNLINKED]="Unlinked"
     fi
 }
 
@@ -449,6 +497,65 @@ sys_check() {
         warn WARN_SYS_CHECK_ISSUES
         exit 1
     fi
+}
+
+sys_list() {
+    require_root
+    printf "%s\n" "$(translate LIST_SYS_TITLE)"
+
+    local profile_status
+    if [ -f "$GLOBAL_PROFILE" ]; then
+        profile_status="$(translate STATUS_INSTALLED) ($GLOBAL_PROFILE)"
+    else
+        profile_status="$(translate STATUS_MISSING)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_GLOBAL_PROFILE)"
+    printf "  %s\n" "$profile_status"
+
+    local cache_status
+    if [ -d "$CACHE_DIR" ]; then
+        cache_status="$(translate STATUS_INSTALLED) ($CACHE_DIR)"
+    else
+        cache_status="$(translate STATUS_MISSING)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_CACHE_DIR)"
+    printf "  %s\n" "$cache_status"
+
+    local brew_status
+    if [ -d "$BREW_CACHE_REPO" ]; then
+        brew_status="$(translate STATUS_INSTALLED)"
+        if git --git-dir="$BREW_CACHE_REPO" rev-parse --is-bare-repository >/dev/null 2>&1; then
+            local last_commit
+            last_commit=$(git --git-dir="$BREW_CACHE_REPO" log -1 --format=%cd --date=short 2>/dev/null || echo "N/A")
+            brew_status="$brew_status (Updated: $last_commit)"
+        fi
+    else
+        brew_status="$(translate STATUS_MISSING)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_BREW_REPO)"
+    printf "  %s\n" "$brew_status"
+
+    printf "%s:\n" "$(translate LIST_ITEM_DOCKER_IMAGES)"
+    if [ -d "$CACHE_DIR" ]; then
+        local found_docker=false
+        for f in "$CACHE_DIR"/docker-*.tgz; do
+            [ -e "$f" ] || continue
+            printf "  %s\n" "$(basename "$f")"
+            found_docker=true
+        done
+        $found_docker || printf "      (None)\n"
+    else
+        printf "      (Cache dir missing)\n"
+    fi
+
+    local share_status
+    if [ -d "$SHARE_DIR" ]; then
+        share_status="$(translate STATUS_INSTALLED) ($SHARE_DIR)"
+    else
+        share_status="$(translate STATUS_MISSING)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_SHARE_DIR)"
+    printf "  %s\n" "$share_status"
 }
 
 sys_remove() {
@@ -798,6 +905,56 @@ module_check() {
     return "$rc"
 }
 
+module_list() {
+    printf "%s\n" "$(translate LIST_USER_TITLE "$USER")"
+
+    local linger_status
+    if loginctl show-user "$USER" --property=Linger 2>/dev/null | grep -q "yes"; then
+        linger_status="$(translate STATUS_ENABLED)"
+    elif loginctl show-user "$USER" --property=Linger >/dev/null 2>&1; then
+        linger_status="$(translate STATUS_DISABLED)"
+    else
+        linger_status="$(translate STATUS_UNKNOWN)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_LINGER)"
+    printf "  %s\n" "$linger_status"
+
+    if [ -f "$HOME/.bashrc" ]; then
+        source "$HOME/.bashrc" || true
+    fi
+
+    local brew_ver
+    if command -v brew >/dev/null 2>&1; then
+        brew_ver=$(brew --version | head -n1 | awk '{print $2}')
+        printf "%s:\n" "$(translate LIST_ITEM_BREW)"
+        printf "  %s (%s)\n" "$(translate STATUS_INSTALLED)" "v$brew_ver"
+    else
+        printf "%s:\n" "$(translate LIST_ITEM_BREW)"
+        printf "  %s\n" "$(translate STATUS_MISSING)"
+    fi
+
+    local docker_ver
+    if command -v docker >/dev/null 2>&1; then
+        docker_ver=$(docker --version | awk '{print $3}' | tr -d ',')
+        printf "%s:\n" "$(translate LIST_ITEM_DOCKER)"
+        printf "  %s (%s)\n" "$(translate STATUS_INSTALLED)" "v$docker_ver"
+    else
+        printf "%s:\n" "$(translate LIST_ITEM_DOCKER)"
+        printf "  %s\n" "$(translate STATUS_MISSING)"
+    fi
+
+    local link_status
+    if [ -L "$HOME/share-workspace" ]; then
+        local target
+        target=$(readlink "$HOME/share-workspace")
+        link_status="$(translate STATUS_LINKED "$target")"
+    else
+        link_status="$(translate STATUS_UNLINKED)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_SHARE_LINK)"
+    printf "  %s\n" "$link_status"
+}
+
 # ---------- docker shortcuts ----------
 docker_service_action() {
     local action="$1"
@@ -828,14 +985,14 @@ ${SCRIPT_NAME} ${VERSION}
     uninstall             卸载已安装的脚本
 
 系统级 (root):
-    sys init|update|check|remove
+    sys init|update|check|remove|list
 
 用户初始化 (root):
     create <user> [--with-docker] [--with-brew] [--link-share] [--all]
-    config <user> install|update|remove|check all|docker|brew|share
+    config <user> install|update|remove|check|list [all|docker|brew|share]
 
 用户模块:
-    module install|update|remove|check all|docker|brew|share [--user <name>]  # 以 root 运行时需指定 --user
+    module install|update|remove|check|list [all|docker|brew|share] [--user <name>]  # 以 root 运行时需指定 --user
 
 Docker 快捷:
     start|stop|status|enable|disable docker [--user <name>]
@@ -854,14 +1011,14 @@ Global:
     uninstall             Remove installed script
 
 System (root):
-    sys init|update|check|remove
+    sys init|update|check|remove|list
 
 User provisioning (root):
     create <user> [--with-docker] [--with-brew] [--link-share] [--all]
-    config <user> install|update|remove|check all|docker|brew|share
+    config <user> install|update|remove|check|list [all|docker|brew|share]
 
 User modules:
-    module install|update|remove|check all|docker|brew|share [--user <name>]  # --user only when run as root
+    module install|update|remove|check|list [all|docker|brew|share] [--user <name>]  # --user only when run as root
 
 Docker shortcuts:
     start|stop|status|enable|disable docker [--user <name>]
@@ -885,8 +1042,13 @@ uninstall_self() {
 handle_module_command() {
     local action="${1:-}"
     local module="${2:-}"
-    validate_params "module" "${action}|action" "${module}|module"
-    shift 2 || true
+    validate_params "module" "${action}|action"
+    if [ "$action" = "list" ]; then
+        shift 1 || true
+    else
+        validate_params "module" "${module}|module"
+        shift 2 || true
+    fi
     local target_user="$USER"
 
     while [ $# -gt 0 ]; do
@@ -894,15 +1056,20 @@ handle_module_command() {
             --user)
                 target_user="${2:-}"
                 [ -n "$target_user" ] || error ERR_MISSING_PARAM "user name"
-
+                shift 2 || true
                 ;;
+            *) error ERR_UNKNOWN_OPTION "$1" ;;
         esac
     done
 
     if [ "$(id -u)" -eq 0 ]; then
         [ -n "$target_user" ] || error WARN_USER_REQUIRED
-        prepare_target_user "$target_user" "$module"
-        run_as_user "$target_user" module "$action" "$module"
+        if [ "$action" = "list" ]; then
+            run_as_user "$target_user" module "$action"
+        else
+            prepare_target_user "$target_user" "$module"
+            run_as_user "$target_user" module "$action" "$module"
+        fi
         if [ "$action" = "remove" ] && { [ "$module" = "all" ] || [ "$module" = "docker" ]; }; then
             disable_user_linger "$target_user"
         fi
@@ -915,6 +1082,7 @@ handle_module_command() {
         update)  module_update "$module" ;;
         remove)  module_remove "$module" ;;
         check)   module_check "$module" ;;
+        list)    module_list ;;
         *)       error ERR_UNKNOWN_MODULE_ACTION "$action" ;;
     esac
 }
@@ -927,9 +1095,13 @@ handle_config_command() {
     validate_params "config" "${user}|username" "${action}|action"
 
     case "$action" in
-        install|update|remove|check) : ;;
+        install|update|remove|check|list) : ;;
         *) error ERR_UNKNOWN_MODULE_ACTION "$action" ;;
     esac
+    if [ "$action" = "list" ]; then
+        run_as_user "$user" module "$action"
+        return
+    fi
     case "$module" in
         all|docker|brew|share) : ;;
         *) error ERR_UNKNOWN_MODULE "$module" ;;
@@ -1027,6 +1199,7 @@ main() {
                 update) sys_update ;;
                 check) sys_check ;;
                 remove) sys_remove ;;
+                list) sys_list ;;
                 *) show_help ; exit 1 ;;
             esac
             ;;
