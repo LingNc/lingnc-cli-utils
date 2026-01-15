@@ -239,7 +239,7 @@ detect_language
 load_messages
 
 SCRIPT_NAME="multiuser"
-VERSION="0.2.1"
+VERSION="0.2.3"
 AUTHOR="LingNc"
 REPOSITORY="https://github.com/LingNc/lingnc-cli-utils"
 
@@ -662,7 +662,7 @@ module_install_brew() {
     fi
 
     local block_content
-    block_content=$(cat <<EOF
+    block_content=$(cat <<'EOF'
 # Homebrew Mirror Settings
 export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git"
 export HOMEBREW_CORE_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/homebrew-core.git"
@@ -671,13 +671,13 @@ export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bot
 export HOMEBREW_PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
 
 # Load Homebrew ShellEnv
-if [ -x "$brew_dir/bin/brew" ]; then
-    eval "$("$brew_dir/bin/brew" shellenv)"
+if [ -x "$HOME/.linuxbrew/bin/brew" ]; then
+    eval "$("$HOME/.linuxbrew/bin/brew" shellenv)"
 fi
 
 # 关键：加载全局配置 (APT 拦截等) - 对应 legacy user_onboard.sh
-if [ -f "$GLOBAL_PROFILE" ]; then
-    . "$GLOBAL_PROFILE"
+if [ -f "/etc/profile.d/99-multiuser-env.sh" ]; then
+    . "/etc/profile.d/99-multiuser-env.sh"
 fi
 EOF
     )
