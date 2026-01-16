@@ -17,50 +17,72 @@ const (
 	MagicMIUI    = "MIUI BACKUP"
 	MagicAndroid = "ANDROID BACKUP"
 	DefaultPkg   = "com.playstack.balatro.android"
+	Version      = "0.2.0"
 )
 
 type MiuiBackup struct {
-	XMLName     xml.Name `xml:"MIUI-backup"`
-	JsonMsg     string   `xml:"jsonMsg"`
-	BakVersion  string   `xml:"bakVersion"`
-	BrState     string   `xml:"brState"`
-	Device      string   `xml:"device"`
-	MiuiVersion string   `xml:"miuiVersion"`
-	Date        string   `xml:"date"`
-	Size        string   `xml:"size"`
-	StorageLeft string   `xml:"storageLeft"`
-	Packages    Packages `xml:"packages"`
+	XMLName                xml.Name `xml:"MIUI-backup"`
+	JsonMsg                string   `xml:"jsonMsg"`
+	BakVersion             string   `xml:"bakVersion"`
+	BrState                string   `xml:"brState"`
+	AutoBackup             string   `xml:"autoBackup"`
+	Device                 string   `xml:"device"`
+	MiuiVersion            string   `xml:"miuiVersion"`
+	Date                   string   `xml:"date"`
+	Size                   string   `xml:"size"`
+	StorageLeft            string   `xml:"storageLeft"`
+	SupportReconnect       string   `xml:"supportReconnect"`
+	AutoRetransferCnt      string   `xml:"autoRetransferCnt"`
+	TransRealCompletedSize string   `xml:"transRealCompletedSize"`
+	Packages               Packages `xml:"packages"`
+	FilesModifyTime        string   `xml:"filesModifyTime"`
 }
 
 type Packages struct {
-	Package Package `xml:"package"`
+	Package []Package `xml:"package"`
 }
 
 type Package struct {
-	PackageName string `xml:"packageName"`
-	BakFile     string `xml:"bakFile"`
-	PkgSize     string `xml:"pkgSize"`
-	AppLabel    string `xml:"appLabel"`
-	DataUsed    string `xml:"dataUsed"`
-	AppSize     string `xml:"appSize"`
-	DataSize    string `xml:"dataSize"`
-	VersionName string `xml:"versionName"`
-	VersionCode string `xml:"versionCode"`
-	IsSystemApp string `xml:"isSystemApp"`
-	IsOnSDCard  string `xml:"isOnSDCard"`
+	PackageName             string `xml:"packageName"`
+	Feature                 string `xml:"feature"`
+	BakFile                 string `xml:"bakFile"`
+	SplitFile               string `xml:"splitFile"`
+	SplitFileSize           string `xml:"splitFileSize"`
+	BakType                 string `xml:"bakType"`
+	PkgSize                 string `xml:"pkgSize"`
+	SdSize                  string `xml:"sdSize"`
+	State                   string `xml:"state"`
+	CompletedSize           string `xml:"completedSize"`
+	Error                   string `xml:"error"`
+	ProgType                string `xml:"progType"`
+	BakFileSize             string `xml:"bakFileSize"`
+	TransingCompletedSize   string `xml:"transingCompletedSize"`
+	TransingTotalSize       string `xml:"transingTotalSize"`
+	TransingSdCompletedSize string `xml:"transingSdCompletedSize"`
+	SectionSize             string `xml:"sectionSize"`
+	SendingIndex            string `xml:"sendingIndex"`
+	AppLabel                string `xml:"appLabel,omitempty"`
+	DataUsed                string `xml:"dataUsed,omitempty"`
+	AppSize                 string `xml:"appSize,omitempty"`
+	DataSize                string `xml:"dataSize,omitempty"`
+	VersionName             string `xml:"versionName,omitempty"`
+	VersionCode             string `xml:"versionCode,omitempty"`
+	IsSystemApp             string `xml:"isSystemApp,omitempty"`
+	IsOnSDCard              string `xml:"isOnSDCard,omitempty"`
 }
 
 func main() {
-	extractPath := flag.String("x", "", "解包模式：输入 .bak 文件路径 (例如: -x backup.bak)")
-	packDir := flag.String("c", "", "打包模式：输入安卓目录路径 (包含 apps/，例如: -c ./android)")
+	extractDir := flag.String("x", "", "解包模式：输入时间戳备份目录路径 (包含 .bak)")
+	packDir := flag.String("c", "", "打包模式：输入安卓目录父路径 (包含 apps/)")
 	pcDir := flag.String("pc", "", "转 PC：输入安卓目录路径 (包含 apps/)")
 	moDir := flag.String("mo", "", "转移动：输入 PC 存档目录路径")
-	xpPath := flag.String("xp", "", "一键解转：输入 .bak 文件路径")
+	xpDir := flag.String("xp", "", "一键解转：输入时间戳备份目录路径")
 	cmDir := flag.String("cm", "", "一键转打：输入 PC 存档目录路径")
+	tplDir := flag.String("t", "", "模板备份目录 (提供 _manifest / sp 等元数据)")
 
 	flag.Parse()
 
-	modeCount := countNotEmpty(*extractPath, *packDir, *pcDir, *moDir, *xpPath, *cmDir)
+	modeCount := countNotEmpty(*extractDir, *packDir, *pcDir, *moDir, *xpDir, *cmDir)
 	if modeCount != 1 {
 		printUsage()
 		return
@@ -68,20 +90,32 @@ func main() {
 
 	var err error
 	switch {
-	case *extractPath != "":
-		err = extractBackupTo(*extractPath, ".")
+	case *extractDir != "":
+		err = extractBackupFromDir(*extractDir)
 	case *packDir != "":
-		err = packToTimestampDir(*packDir)
+		if strings.TrimSpace(*tplDir) == "" {
+			err = fmt.Errorf("打包模式 (-c) 需要指定模板 (-t)")
+			break
+		}
+		err = packToTimestampDir(*packDir, *tplDir)
 	case *pcDir != "":
 		outDir := defaultOutDir(*pcDir, "_pc")
 		err = convertToPC(*pcDir, outDir)
 	case *moDir != "":
+		if strings.TrimSpace(*tplDir) == "" {
+			err = fmt.Errorf("转移动模式必须指定模板路径 (-t)")
+			break
+		}
 		outDir := defaultOutDir(*moDir, "_android")
-		err = convertToMobile(*moDir, outDir, DefaultPkg)
-	case *xpPath != "":
-		err = extractAndConvertToPC(*xpPath)
+		err = convertToMobileWithTemplate(*moDir, *tplDir, outDir)
+	case *xpDir != "":
+		err = extractAndConvertToPCFromDir(*xpDir)
 	case *cmDir != "":
-		err = convertAndPackFromPC(*cmDir)
+		if strings.TrimSpace(*tplDir) == "" {
+			err = fmt.Errorf("PC 转安卓模式必须指定模板路径 (-t)")
+			break
+		}
+		err = convertAndPackFromPC(*cmDir, *tplDir)
 	}
 
 	if err != nil {
@@ -91,14 +125,56 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("Balatro 存档跨平台管理工具")
-	fmt.Println("用法:")
-	fmt.Println("  解包: balatro_save -x <文件路径.bak>")
-	fmt.Println("  打包: balatro_save -c <安卓目录路径>")
-	fmt.Println("  转PC: balatro_save --pc <安卓目录路径>")
-	fmt.Println("  转移动: balatro_save --mo <PC存档目录路径>")
-	fmt.Println("  一键解转: balatro_save -xp <文件路径.bak>")
-	fmt.Println("  一键转打: balatro_save -cm <PC存档目录路径>")
+	const (
+		col1Width = 6  // flag 列宽 (如 "  -cm")
+		col2Width = 16 // 参数列宽 (如 "<安卓源码目录>")
+	)
+
+	printRow := func(flag, arg, desc string) {
+		pad1 := spaces(col1Width - visualLength(flag))
+		pad2 := spaces(col2Width - visualLength(arg))
+		fmt.Printf("%s%s%s%s%s\n", flag, pad1, arg, pad2, desc)
+	}
+
+	fmt.Printf("Balatro 存档跨平台管理工具 v%s\n", Version)
+	fmt.Println("------------------------------------------------------------")
+	fmt.Println("用法: balatro_save [选项] <路径>\n")
+
+	fmt.Println("核心模式:")
+	printRow("  -x", "<备份目录>", "解包模式：输入时间戳文件夹，解压到当前目录")
+	printRow("  -c", "<安卓源码目录>", "打包模式：输入 apps/ 所在的父目录，生成时间戳备份文件夹 (需 -t)")
+	printRow("  -xp", "<备份目录>", "一键解转：输入时间戳文件夹 -> 转换并输出为 PC 存档")
+	printRow("  -cm", "<PC存档目录>", "一键转打：输入 PC 存档 -> 注入模板 -> 生成时间戳备份文件夹")
+	printRow("  -pc", "<安卓目录>", "转 PC：输入安卓目录 (apps/) -> 转换为 PC 存档")
+	printRow("  -mo", "<PC存档目录>", "转移动：输入 PC 存档 -> 注入模板 -> 输出安卓目录结构")
+
+	fmt.Println("\n辅助参数:")
+	printRow("  -t", "<路径>", "[必选] 指定模板，支持'备份文件夹'或'descript.xml' 文件")
+	printRow("", "", "用于 -c (生成XML) 与 -cm/-mo (提取 _manifest / sp)")
+
+	fmt.Println("\n示例:")
+	fmt.Println("  解包备份:\tbalatro_save -x ./20260116_120000")
+	fmt.Println("  PC转手机:\tbalatro_save -cm ./MyPCSave -t ./OldBackup_20250101")
+	fmt.Println("------------------------------------------------------------")
+}
+
+func visualLength(s string) int {
+	length := 0
+	for _, r := range s {
+		if r > 127 {
+			length += 2
+		} else {
+			length++
+		}
+	}
+	return length
+}
+
+func spaces(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat(" ", n)
 }
 
 func countNotEmpty(values ...string) int {
@@ -119,9 +195,40 @@ func defaultOutDir(input, suffix string) string {
 	return base + suffix
 }
 
+func findBakInDir(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var bakFiles []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(e.Name()), ".bak") {
+			bakFiles = append(bakFiles, filepath.Join(dir, e.Name()))
+		}
+	}
+	if len(bakFiles) == 0 {
+		return "", fmt.Errorf("在目录 %s 中未找到 .bak 文件", dir)
+	}
+	if len(bakFiles) > 1 {
+		return "", fmt.Errorf("在目录 %s 中找到多个 .bak 文件，请保留唯一目标", dir)
+	}
+	return bakFiles[0], nil
+}
+
 // ---------------------------------------------------------
 // Extract
 // ---------------------------------------------------------
+
+func extractBackupFromDir(backupDir string) error {
+	bakPath, err := findBakInDir(backupDir)
+	if err != nil {
+		return err
+	}
+	return extractBackupTo(bakPath, ".")
+}
 
 func extractBackupTo(filename, outDir string) error {
 	file, err := os.Open(filename)
@@ -239,13 +346,24 @@ func findDataOffset(file *os.File) (int64, error) {
 // Pack
 // ---------------------------------------------------------
 
-func packToTimestampDir(androidDir string) error {
+func packToTimestampDir(androidDir, templatePath string) error {
 	appsDir, pkgName, err := detectAppsDirAndPkg(androidDir, DefaultPkg)
 	if err != nil {
 		return err
 	}
 
-	nowStr := time.Now().Format("20060102_150405")
+	template, err := loadTemplate(templatePath)
+	if err != nil {
+		return err
+	}
+
+	appLabel := "Balatro"
+	if len(template.Packages.Package) > 0 && template.Packages.Package[0].AppLabel != "" {
+		appLabel = template.Packages.Package[0].AppLabel
+	}
+
+	now := time.Now()
+	nowStr := now.Format("20060102_150405")
 	if err := os.MkdirAll(nowStr, 0755); err != nil {
 		return err
 	}
@@ -253,23 +371,23 @@ func packToTimestampDir(androidDir string) error {
 	bakFileName := fmt.Sprintf("Balatro(%s).bak", pkgName)
 	outBakPath := filepath.Join(nowStr, bakFileName)
 
-	size, err := createBackupTo(appsDir, outBakPath, pkgName)
+	size, err := createBackupTo(appsDir, outBakPath, pkgName, appLabel)
 	if err != nil {
 		return err
 	}
 
-	return generateDescriptor(nowStr, pkgName, bakFileName, size)
+	return generateDescriptorFromTemplate(nowStr, template, pkgName, bakFileName, size, now)
 }
 
-func createBackupTo(appsDir, outPath, pkgName string) (int64, error) {
+func createBackupTo(appsDir, outPath, pkgName, appLabel string) (int64, error) {
 	outFile, err := os.Create(outPath)
 	if err != nil {
 		return 0, err
 	}
 
 	// 头部
-	headerStr := fmt.Sprintf("%s\n2\n%s %s\n%s\n5\n0\nnone\n",
-		MagicMIUI, pkgName, pkgName, MagicAndroid)
+	headerStr := fmt.Sprintf("%s\n2\n%s %s\n-1\n0\n%s\n5\n0\nnone\n",
+		MagicMIUI, pkgName, appLabel, MagicAndroid)
 	if _, err := outFile.WriteString(headerStr); err != nil {
 		outFile.Close()
 		return 0, err
@@ -278,42 +396,73 @@ func createBackupTo(appsDir, outPath, pkgName string) (int64, error) {
 	fmt.Printf("正在打包目录: %s -> %s\n", appsDir, outPath)
 
 	tw := tar.NewWriter(outFile)
-	if err := filepath.Walk(appsDir, func(file string, fi os.FileInfo, err error) error {
+
+	writeTarEntry := func(path string, fi os.FileInfo) error {
+		relPath, err := filepath.Rel(appsDir, path)
 		if err != nil {
 			return err
 		}
-		header, err := tar.FileInfoHeader(fi, file)
+		relPath = filepath.ToSlash(relPath)
+		if relPath == "." {
+			return nil
+		}
+		finalName := "apps/" + relPath
+
+		header, err := tar.FileInfoHeader(fi, path)
 		if err != nil {
 			return err
 		}
-		relPath, err := filepath.Rel(filepath.Dir(appsDir), file)
-		if err != nil {
-			return err
-		}
-		header.Name = filepath.ToSlash(relPath)
+		header.Name = finalName
+		header.Mode = 0600
+		header.Uid = 0
+		header.Gid = 0
+		header.Uname = ""
+		header.Gname = ""
+		header.Format = tar.FormatUSTAR
+		header.ModTime = fi.ModTime()
+		header.AccessTime = time.Time{}
+		header.ChangeTime = time.Time{}
 
 		if err := tw.WriteHeader(header); err != nil {
 			return err
 		}
-		if !fi.IsDir() {
-			data, err := os.Open(file)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(tw, data); err != nil {
-				data.Close()
-				return err
-			}
-			data.Close()
+		data, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer data.Close()
+		if _, err := io.Copy(tw, data); err != nil {
+			return err
 		}
 		return nil
+	}
+
+	manifestPath := filepath.Join(appsDir, pkgName, "_manifest")
+	if manifestInfo, err := os.Stat(manifestPath); err == nil && !manifestInfo.IsDir() {
+		if err := writeTarEntry(manifestPath, manifestInfo); err != nil {
+			return 0, fmt.Errorf("写入 _manifest 失败: %v", err)
+		}
+	}
+
+	if err := filepath.Walk(appsDir, func(file string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if fi.IsDir() {
+			return nil
+		}
+		if filepath.Base(file) == "_manifest" {
+			return nil
+		}
+		return writeTarEntry(file, fi)
 	}); err != nil {
-		tw.Close()
-		outFile.Close()
 		return 0, err
 	}
+
 	if err := tw.Close(); err != nil {
-		outFile.Close()
+		return 0, err
+	}
+	if err := outFile.Sync(); err != nil {
 		return 0, err
 	}
 	if err := outFile.Close(); err != nil {
@@ -392,9 +541,89 @@ func convertToMobile(pcDir, outDir, fallbackPkg string) error {
 	return nil
 }
 
+func convertToMobileInto(pcDir, outDir, pkgName string) error {
+	appsDir := filepath.Join(outDir, "apps")
+	fDir := filepath.Join(appsDir, pkgName, "f")
+
+	if err := os.MkdirAll(fDir, 0755); err != nil {
+		return err
+	}
+
+	for _, id := range []string{"1", "2", "3"} {
+		pcSlotDir := filepath.Join(pcDir, id)
+		if err := copyIfExists(filepath.Join(pcSlotDir, "profile.jkr"), filepath.Join(fDir, id+"-profile.jkr")); err != nil {
+			return err
+		}
+		if err := copyIfExists(filepath.Join(pcSlotDir, "meta.jkr"), filepath.Join(fDir, id+"-meta.jkr")); err != nil {
+			return err
+		}
+		if err := copyIfExists(filepath.Join(pcSlotDir, "save.jkr"), filepath.Join(fDir, "save", "ASET", id, "save.jkr")); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func convertToMobileWithTemplate(pcDir, tplDir, outDir string) error {
+	if _, err := buildAndroidWithTemplate(pcDir, tplDir, outDir); err != nil {
+		return err
+	}
+	fmt.Printf("已生成安卓目录: %s\n", outDir)
+	return nil
+}
+
+func buildAndroidWithTemplate(pcDir, tplDir, outDir string) (string, error) {
+	tplBak, err := findBakInDir(tplDir)
+	if err != nil {
+		return "", err
+	}
+
+	tmpDir, err := os.MkdirTemp("", "balatro_tpl_")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tplExtract := filepath.Join(tmpDir, "tpl")
+	if err := extractBackupTo(tplBak, tplExtract); err != nil {
+		return "", err
+	}
+
+	pkgName, err := findPackageName(tplExtract)
+	if err != nil {
+		pkgName = DefaultPkg
+	}
+
+	if err := os.RemoveAll(outDir); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return "", err
+	}
+
+	if err := copyTemplateSkeleton(tplExtract, pkgName, outDir); err != nil {
+		return "", err
+	}
+
+	if err := convertToMobileInto(pcDir, outDir, pkgName); err != nil {
+		return "", err
+	}
+
+	return pkgName, nil
+}
+
 // ---------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------
+
+func extractAndConvertToPCFromDir(backupDir string) error {
+	bakPath, err := findBakInDir(backupDir)
+	if err != nil {
+		return err
+	}
+	return extractAndConvertToPC(bakPath)
+}
 
 func extractAndConvertToPC(bakPath string) error {
 	tmpDir, err := os.MkdirTemp("", "balatro_extract_")
@@ -411,57 +640,79 @@ func extractAndConvertToPC(bakPath string) error {
 	return convertToPC(tmpDir, outDir)
 }
 
-func convertAndPackFromPC(pcDir string) error {
+func convertAndPackFromPC(pcDir, tplDir string) error {
 	tmpDir, err := os.MkdirTemp("", "balatro_mobile_")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if err := convertToMobile(pcDir, tmpDir, DefaultPkg); err != nil {
+	buildDir := filepath.Join(tmpDir, "build")
+	if _, err := buildAndroidWithTemplate(pcDir, tplDir, buildDir); err != nil {
 		return err
 	}
 
-	return packToTimestampDir(tmpDir)
+	return packToTimestampDir(buildDir, tplDir)
 }
 
 // ---------------------------------------------------------
 // XML
 // ---------------------------------------------------------
 
-func generateDescriptor(outDir, pkgName, bakFileName string, fileSize int64) error {
-	info := MiuiBackup{
-		JsonMsg:     "{}",
-		BakVersion:  "2",
-		BrState:     "3",
-		Device:      "balatro_tool",
-		MiuiVersion: "V816",
-		Date:        fmt.Sprintf("%d", time.Now().UnixMilli()),
-		Size:        fmt.Sprintf("%d", fileSize),
-		StorageLeft: "1099511627776",
-		Packages: Packages{
-			Package: Package{
-				PackageName: pkgName,
-				BakFile:     bakFileName,
-				PkgSize:     fmt.Sprintf("%d", fileSize),
-				AppLabel:    "Balatro",
-				DataUsed:    "0",
-				AppSize:     "0",
-				DataSize:    fmt.Sprintf("%d", fileSize),
-				VersionName: "0",
-				VersionCode: "0",
-				IsSystemApp: "false",
-				IsOnSDCard:  "false",
-			},
-		},
+func loadTemplate(path string) (*MiuiBackup, error) {
+	xmlPath := path
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		xmlPath = filepath.Join(path, "descript.xml")
+	}
+	data, err := os.ReadFile(xmlPath)
+	if err != nil {
+		return nil, fmt.Errorf("无法读取模板 XML: %v", err)
+	}
+	var backup MiuiBackup
+	if err := xml.Unmarshal(data, &backup); err != nil {
+		return nil, fmt.Errorf("解析模板 XML 失败: %v", err)
+	}
+	return &backup, nil
+}
+
+func generateDescriptorFromTemplate(outDir string, template *MiuiBackup, pkgName, bakFileName string, fileSize int64, now time.Time) error {
+	if template == nil {
+		return fmt.Errorf("模板为空")
 	}
 
-	output, err := xml.MarshalIndent(info, "", "    ")
+	template.Date = fmt.Sprintf("%d", now.UnixMilli())
+	template.Size = fmt.Sprintf("%d", fileSize)
+
+	if len(template.Packages.Package) == 0 {
+		template.Packages.Package = []Package{{}}
+	}
+	pkg := &template.Packages.Package[0]
+	pkg.PackageName = pkgName
+	pkg.BakFile = bakFileName
+	if pkg.PkgSize != "" {
+		pkg.PkgSize = fmt.Sprintf("%d", fileSize)
+	}
+	if pkg.DataSize != "" {
+		pkg.DataSize = fmt.Sprintf("%d", fileSize)
+	}
+	if pkg.BakFileSize != "" {
+		pkg.BakFileSize = fmt.Sprintf("%d", fileSize)
+	}
+	if pkg.CompletedSize != "" {
+		pkg.CompletedSize = fmt.Sprintf("%d", fileSize)
+	}
+
+	output, err := xml.Marshal(template)
 	if err != nil {
 		return err
 	}
-	header := []byte("<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>\n")
-	return os.WriteFile(filepath.Join(outDir, "descript.xml"), append(header, output...), 0644)
+	outputStr := strings.ReplaceAll(string(output), "<filesModifyTime></filesModifyTime>", "<filesModifyTime />")
+	header := []byte("<?xml version='1.0' encoding='UTF-8' standalone='yes'?>")
+	return os.WriteFile(filepath.Join(outDir, "descript.xml"), append(header, []byte(outputStr)...), 0644)
 }
 
 // ---------------------------------------------------------
@@ -528,6 +779,92 @@ func copyIfExists(src, dst string) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func copyTemplateSkeleton(tplRoot, pkgName, outDir string) error {
+	srcPkg := filepath.Join(tplRoot, "apps", pkgName)
+	dstPkg := filepath.Join(outDir, "apps", pkgName)
+
+	if err := os.MkdirAll(dstPkg, 0755); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(srcPkg)
+	if err != nil {
+		return err
+	}
+
+	for _, e := range entries {
+		name := e.Name()
+		if name == "f" {
+			continue
+		}
+		srcPath := filepath.Join(srcPkg, name)
+		dstPath := filepath.Join(dstPkg, name)
+		if e.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return err
+		}
+		return copyFileWithMode(path, target, info.Mode())
+	})
+}
+
+func copyFile(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	return copyFileWithMode(src, dst, info.Mode())
+}
+
+func copyFileWithMode(src, dst string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Chmod(mode); err != nil {
 		out.Close()
 		return err
 	}
