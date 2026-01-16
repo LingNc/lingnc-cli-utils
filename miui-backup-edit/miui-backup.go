@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // 定义头部常量
@@ -183,11 +184,13 @@ func createBackup(sourceDir string) error {
 	// MIUI BACKUP\n
 	// 2\n
 	// 包名 标签\n
+	// -1\n
+	// 0\n
 	// ANDROID BACKUP\n
 	// 5\n
 	// 0\n
 	// none\n
-	headerStr := fmt.Sprintf("%s\n2\n%s %s\n%s\n5\n0\nnone\n",
+	headerStr := fmt.Sprintf("%s\n2\n%s %s\n-1\n0\n%s\n5\n0\nnone\n",
 		MagicMIUI, pkgName, pkgName, MagicAndroid)
 
 	if _, err := outFile.WriteString(headerStr); err != nil {
@@ -205,6 +208,12 @@ func createBackup(sourceDir string) error {
 		if err != nil {
 			return err
 		}
+		if fi.IsDir() {
+			return nil
+		}
+		if fi.IsDir() {
+			return nil
+		}
 
 		// 生成 tar 内部的头部信息
 		header, err := tar.FileInfoHeader(fi, file)
@@ -221,21 +230,27 @@ func createBackup(sourceDir string) error {
 		}
 		// Windows下路径分隔符替换为 /
 		header.Name = filepath.ToSlash(relPath)
+		header.Mode = 0600
+		header.Uid = 0
+		header.Gid = 0
+		header.Uname = ""
+		header.Gname = ""
+		header.Format = tar.FormatUSTAR
+		header.ModTime = fi.ModTime()
+		header.AccessTime = time.Time{}
+		header.ChangeTime = time.Time{}
 
 		if err := tw.WriteHeader(header); err != nil {
 			return err
 		}
 
-		// 如果是普通文件，写入内容
-		if !fi.IsDir() {
-			data, err := os.Open(file)
-			if err != nil {
-				return err
-			}
-			defer data.Close()
-			if _, err := io.Copy(tw, data); err != nil {
-				return err
-			}
+		data, err := os.Open(file)
+		if err != nil {
+			return err
+		}
+		defer data.Close()
+		if _, err := io.Copy(tw, data); err != nil {
+			return err
 		}
 		return nil
 	})
