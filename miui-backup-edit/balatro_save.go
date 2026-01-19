@@ -79,8 +79,17 @@ func main() {
 	xpDir := flag.String("xp", "", "一键解转：输入时间戳备份目录路径")
 	cmDir := flag.String("cm", "", "一键转打：输入 PC 存档目录路径")
 	tplDir := flag.String("t", "", "模板备份目录 (提供 _manifest / sp 等元数据)")
+	helpShort := flag.Bool("h", false, "显示帮助")
+	helpLong := flag.Bool("help", false, "显示帮助")
+
+	flag.Usage = printUsage
 
 	flag.Parse()
+
+	if *helpShort || *helpLong {
+		printUsage()
+		return
+	}
 
 	modeCount := countNotEmpty(*extractDir, *packDir, *pcDir, *moDir, *xpDir, *cmDir)
 	if modeCount != 1 {
@@ -93,11 +102,12 @@ func main() {
 	case *extractDir != "":
 		err = extractBackupFromDir(*extractDir)
 	case *packDir != "":
-		if strings.TrimSpace(*tplDir) == "" {
-			err = fmt.Errorf("打包模式 (-c) 需要指定模板 (-t)")
+		resolvedTpl, tplErr := resolveTemplatePath(*packDir, *tplDir)
+		if tplErr != nil {
+			err = tplErr
 			break
 		}
-		err = packToTimestampDir(*packDir, *tplDir)
+		err = packToTimestampDir(*packDir, resolvedTpl)
 	case *pcDir != "":
 		outDir := defaultOutDir(*pcDir, "_pc")
 		err = convertToPC(*pcDir, outDir)
@@ -142,15 +152,17 @@ func printUsage() {
 
 	fmt.Println("核心模式:")
 	printRow("  -x", "<备份目录>", "解包模式：输入时间戳文件夹，解压到当前目录")
-	printRow("  -c", "<安卓源码目录>", "打包模式：输入 apps/ 所在的父目录，生成时间戳备份文件夹 (需 -t)")
+	printRow("  -c", "<安卓源码目录>", "打包模式：输入 apps/ 所在的父目录，生成时间戳备份文件夹")
 	printRow("  -xp", "<备份目录>", "一键解转：输入时间戳文件夹 -> 转换并输出为 PC 存档")
 	printRow("  -cm", "<PC存档目录>", "一键转打：输入 PC 存档 -> 注入模板 -> 生成时间戳备份文件夹")
 	printRow("  -pc", "<安卓目录>", "转 PC：输入安卓目录 (apps/) -> 转换为 PC 存档")
 	printRow("  -mo", "<PC存档目录>", "转移动：输入 PC 存档 -> 注入模板 -> 输出安卓目录结构")
 
 	fmt.Println("\n辅助参数:")
-	printRow("  -t", "<路径>", "[必选] 指定模板，支持'备份文件夹'或'descript.xml' 文件")
+	printRow("  -t", "<路径>", "[可选] 指定模板，支持'备份文件夹'或'descript.xml' 文件")
 	printRow("", "", "用于 -c (生成XML) 与 -cm/-mo (提取 _manifest / sp)")
+	printRow("  -h", "", "显示帮助")
+	printRow("  --help", "", "显示帮助")
 
 	fmt.Println("\n示例:")
 	fmt.Println("  解包备份:\tbalatro_save -x ./20260116_120000")
@@ -195,6 +207,24 @@ func defaultOutDir(input, suffix string) string {
 	return base + suffix
 }
 
+func resolveTemplatePath(baseDir, tplPath string) (string, error) {
+	if strings.TrimSpace(tplPath) != "" {
+		return tplPath, nil
+	}
+	appsDir := baseDir
+	if filepath.Base(baseDir) != "apps" {
+		candidate := filepath.Join(baseDir, "apps")
+		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+			appsDir = candidate
+		}
+	}
+	xmlPath := filepath.Join(appsDir, "descript.xml")
+	if _, err := os.Stat(xmlPath); err == nil {
+		return xmlPath, nil
+	}
+	return "", fmt.Errorf("打包模式 (-c) 需要模板 (-t)，或在 apps/descript.xml 中提供")
+}
+
 func findBakInDir(dir string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -227,7 +257,14 @@ func extractBackupFromDir(backupDir string) error {
 	if err != nil {
 		return err
 	}
-	return extractBackupTo(bakPath, ".")
+	if err := extractBackupTo(bakPath, "."); err != nil {
+		return err
+	}
+	xmlPath := filepath.Join(backupDir, "descript.xml")
+	if _, err := os.Stat(xmlPath); err == nil {
+		_ = copyIfExists(xmlPath, filepath.Join("apps", "descript.xml"))
+	}
+	return nil
 }
 
 func extractBackupTo(filename, outDir string) error {
