@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const zipMarkerName = ".balatro_zip_marker"
@@ -154,7 +156,7 @@ func zipDirRecursively(srcDir, zipPath string) error {
 	})
 }
 
-func zipArchiveWithMarker(srcDir, zipPath string) error {
+func zipArchiveWithMarker(srcDir, zipPath string, timestamp time.Time) error {
 	outFile, err := os.Create(zipPath)
 	if err != nil {
 		return err
@@ -168,7 +170,11 @@ func zipArchiveWithMarker(srcDir, zipPath string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := marker.Write([]byte("balatro-archive")); err != nil {
+	content := "balatro-archive"
+	if !timestamp.IsZero() {
+		content = fmt.Sprintf("balatro-archive|%d", timestamp.UnixMilli())
+	}
+	if _, err := marker.Write([]byte(content)); err != nil {
 		return err
 	}
 
@@ -201,6 +207,42 @@ func zipArchiveWithMarker(srcDir, zipPath string) error {
 		}
 		return in.Close()
 	})
+}
+
+func getArchiveTimestamp(zipPath string) (time.Time, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		name := strings.TrimPrefix(filepath.ToSlash(f.Name), "./")
+		if name != zipMarkerName {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return time.Time{}, err
+		}
+		data, _ := io.ReadAll(rc)
+		rc.Close()
+		parts := strings.Split(string(data), "|")
+		if len(parts) == 2 {
+			if ms, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64); err == nil {
+				return time.UnixMilli(ms), nil
+			}
+		}
+		if !f.Modified.IsZero() {
+			return f.Modified, nil
+		}
+		return time.Time{}, nil
+	}
+
+	if st, err := os.Stat(zipPath); err == nil {
+		return st.ModTime(), nil
+	}
+	return time.Time{}, nil
 }
 
 func validateBackupZip(zipPath string) (string, error) {

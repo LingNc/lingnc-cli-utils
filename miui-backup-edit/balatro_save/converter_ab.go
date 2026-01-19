@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -71,7 +72,11 @@ func convertArchiveToBackup(archZip, tplPath, outputBaseDir string) error {
 		return err
 	}
 
-	return packToTimestampDir(buildDir, tplPath, outputBaseDir)
+	archTime, err := getArchiveTimestamp(archZip)
+	if err != nil {
+		archTime = time.Time{}
+	}
+	return packToTimestampDir(buildDir, tplPath, outputBaseDir, archTime)
 }
 
 func convertBackupToArchive(bakInput string) error {
@@ -81,7 +86,9 @@ func convertBackupToArchive(bakInput string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if strings.HasSuffix(strings.ToLower(bakInput), ".zip") {
+	var bakPath string
+	low := strings.ToLower(bakInput)
+	if strings.HasSuffix(low, ".zip") {
 		if err := withZipInput(bakInput, func(dir string) error {
 			bak, err := findBakInDir(dir)
 			if err != nil {
@@ -91,12 +98,14 @@ func convertBackupToArchive(bakInput string) error {
 		}); err != nil {
 			return err
 		}
-	} else if strings.HasSuffix(strings.ToLower(bakInput), ".bak") {
+	} else if strings.HasSuffix(low, ".bak") {
+		bakPath = bakInput
 		if err := extractBackupTo(bakInput, tmpDir); err != nil {
 			return err
 		}
 	} else {
-		bakPath, err := findBakInDir(bakInput)
+		var err error
+		bakPath, err = findBakInDir(bakInput)
 		if err != nil {
 			return err
 		}
@@ -117,6 +126,21 @@ func convertBackupToArchive(bakInput string) error {
 		return err
 	}
 
-	zipName := fmt.Sprintf("balatro-archive-%s.zip", time.Now().Format("20060102-1504"))
-	return zipArchiveWithMarker(archDir, zipName)
+	srcTime := time.Time{}
+	if tmpl, err := loadTemplateSmart(bakInput); err == nil {
+		if ms, err := strconv.ParseInt(strings.TrimSpace(tmpl.Date), 10, 64); err == nil {
+			srcTime = time.UnixMilli(ms)
+		}
+	}
+	if srcTime.IsZero() && bakPath != "" {
+		if st, err := os.Stat(bakPath); err == nil {
+			srcTime = st.ModTime()
+		}
+	}
+	if srcTime.IsZero() {
+		srcTime = time.Now()
+	}
+
+	zipName := fmt.Sprintf("balatro-archive-%s.zip", srcTime.Format("20060102-1504"))
+	return zipArchiveWithMarker(archDir, zipName, srcTime)
 }

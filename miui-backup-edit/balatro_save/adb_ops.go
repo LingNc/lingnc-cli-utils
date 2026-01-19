@@ -111,7 +111,7 @@ func adbClearFiles(pkgName string) error {
 	return nil
 }
 
-func tarStreamToZip(tarStream io.Reader, outZip string) error {
+func tarStreamToZip(tarStream io.Reader, outZip string, timestamp time.Time) error {
 	outFile, err := os.Create(outZip)
 	if err != nil {
 		return err
@@ -125,7 +125,11 @@ func tarStreamToZip(tarStream io.Reader, outZip string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := marker.Write([]byte("balatro-adb")); err != nil {
+	content := "balatro-archive"
+	if !timestamp.IsZero() {
+		content = fmt.Sprintf("balatro-archive|%d", timestamp.UnixMilli())
+	}
+	if _, err := marker.Write([]byte(content)); err != nil {
 		return err
 	}
 

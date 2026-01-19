@@ -18,7 +18,7 @@ const (
 	MagicMIUI    = "MIUI BACKUP"
 	MagicAndroid = "ANDROID BACKUP"
 	DefaultPkg   = "com.playstack.balatro.android"
-	Version      = "0.4.0"
+	Version      = "0.5.1"
 )
 
 type MiuiBackup struct {
@@ -125,7 +125,7 @@ func main() {
 	var err error
 	switch {
 	case *extractDir != "":
-		if *useZip {
+		if *useZip || isZipPath(*extractDir) {
 			err = withZipInput(*extractDir, extractBackupFromDir)
 		} else {
 			err = extractBackupFromDir(*extractDir)
@@ -137,11 +137,11 @@ func main() {
 			break
 		}
 		if *useZip {
-			err = withZipOutput(func(outBase string) error {
-				return packToTimestampDir(*packDir, resolvedTpl, outBase)
-			})
+				err = withZipOutput(func(outBase string) error {
+					return packToTimestampDir(*packDir, resolvedTpl, outBase, time.Time{})
+				})
 		} else {
-			err = packToTimestampDir(*packDir, resolvedTpl, ".")
+			err = packToTimestampDir(*packDir, resolvedTpl, ".", time.Time{})
 		}
 	case *pcDir != "":
 		outDir := defaultOutDir(*pcDir, "_pc")
@@ -154,7 +154,7 @@ func main() {
 		outDir := defaultOutDir(*moDir, "_android")
 		err = convertToMobileWithTemplate(*moDir, *tplDir, outDir)
 	case *xpDir != "":
-		if *useZip {
+		if *useZip || isZipPath(*xpDir) {
 			err = withZipInput(*xpDir, extractAndConvertToPCFromDir)
 		} else {
 			err = extractAndConvertToPCFromDir(*xpDir)
@@ -165,9 +165,9 @@ func main() {
 			break
 		}
 		if *useZip {
-			err = withZipOutput(func(outBase string) error {
-				return convertAndPackFromPC(*cmDir, *tplDir, outBase)
-			})
+				err = withZipOutput(func(outBase string) error {
+					return convertAndPackFromPC(*cmDir, *tplDir, outBase)
+				})
 		} else {
 			err = convertAndPackFromPC(*cmDir, *tplDir, ".")
 		}
@@ -185,9 +185,9 @@ func main() {
 			break
 		}
 		if *useZip {
-			err = withZipOutput(func(outBase string) error {
-				return convertArchiveToBackup(*archToBak, *tplDir, outBase)
-			})
+				err = withZipOutput(func(outBase string) error {
+					return convertArchiveToBackup(*archToBak, *tplDir, outBase)
+				})
 		} else {
 			err = convertArchiveToBackup(*archToBak, *tplDir, ".")
 		}
@@ -217,6 +217,10 @@ func expandZipCombinedFlags() {
 			args = append(args, "-z", "-xp")
 		case "-zcm":
 			args = append(args, "-z", "-cm")
+		case "-zab":
+			args = append(args, "-z", "-ab")
+		case "-zba":
+			args = append(args, "-z", "-ba")
 		default:
 			args = append(args, arg)
 		}
@@ -310,6 +314,10 @@ func defaultOutDir(input, suffix string) string {
 		return "output" + suffix
 	}
 	return base + suffix
+}
+
+func isZipPath(path string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path)), ".zip")
 }
 
 func resolveTemplatePath(baseDir, tplPath string) (string, error) {
@@ -583,7 +591,7 @@ func loadHeaderJSON(path string) (*AppHeader, error) {
 // Pack
 // ---------------------------------------------------------
 
-func packToTimestampDir(androidDir, templatePath, outputBaseDir string) error {
+func packToTimestampDir(androidDir, templatePath, outputBaseDir string, overrideTime time.Time) error {
 	appsDir, pkgName, err := detectAppsDirAndPkg(androidDir, DefaultPkg)
 	if err != nil {
 		return err
@@ -603,6 +611,9 @@ func packToTimestampDir(androidDir, templatePath, outputBaseDir string) error {
 	}
 
 	now := time.Now()
+	if !overrideTime.IsZero() {
+		now = overrideTime
+	}
 	nowStr := now.Format("20060102_150405")
 	if outputBaseDir == "" {
 		outputBaseDir = "."
@@ -1049,7 +1060,7 @@ func convertAndPackFromPC(pcDir, tplDir, outputBaseDir string) error {
 		return err
 	}
 
-	return packToTimestampDir(buildDir, tplDir, outputBaseDir)
+	return packToTimestampDir(buildDir, tplDir, outputBaseDir, time.Time{})
 }
 
 // ---------------------------------------------------------
@@ -1069,8 +1080,9 @@ func adbBackupToZip(pkgName string) error {
 		return err
 	}
 
-	zipName := fmt.Sprintf("balatro-archive-%s.zip", time.Now().Format("20060102-1504"))
-	if err := tarStreamToZip(stream.stdout, zipName); err != nil {
+	now := time.Now()
+	zipName := fmt.Sprintf("balatro-archive-%s.zip", now.Format("20060102-1504"))
+	if err := tarStreamToZip(stream.stdout, zipName, now); err != nil {
 		_ = stream.Close()
 		return err
 	}
