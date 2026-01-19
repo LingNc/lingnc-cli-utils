@@ -17,7 +17,7 @@ const (
 	MagicMIUI    = "MIUI BACKUP"
 	MagicAndroid = "ANDROID BACKUP"
 	DefaultPkg   = "com.playstack.balatro.android"
-	Version      = "0.2.0"
+	Version      = "0.3.0"
 )
 
 type MiuiBackup struct {
@@ -78,6 +78,10 @@ func main() {
 	moDir := flag.String("mo", "", "转移动：输入 PC 存档目录路径")
 	xpDir := flag.String("xp", "", "一键解转：输入时间戳备份目录路径")
 	cmDir := flag.String("cm", "", "一键转打：输入 PC 存档目录路径")
+	adbBackup := flag.Bool("b", false, "[ADB] 备份：手机 -> balatro-arch-时间.zip")
+	adbRestore := flag.String("r", "", "[ADB] 还原：zip -> 手机")
+	adbToPC := flag.String("bp", "", "[ADB] 导出：手机 -> PC 存档目录")
+	pcToAdb := flag.String("rm", "", "[ADB] 注入：PC 存档 -> 手机")
 	tplDir := flag.String("t", "", "模板备份目录 (提供 _manifest / sp 等元数据)")
 	helpShort := flag.Bool("h", false, "显示帮助")
 	helpLong := flag.Bool("help", false, "显示帮助")
@@ -91,7 +95,10 @@ func main() {
 		return
 	}
 
-	modeCount := countNotEmpty(*extractDir, *packDir, *pcDir, *moDir, *xpDir, *cmDir)
+	modeCount := countNotEmpty(*extractDir, *packDir, *pcDir, *moDir, *xpDir, *cmDir, *adbRestore, *adbToPC, *pcToAdb)
+	if *adbBackup {
+		modeCount++
+	}
 	if modeCount != 1 {
 		printUsage()
 		return
@@ -126,6 +133,14 @@ func main() {
 			break
 		}
 		err = convertAndPackFromPC(*cmDir, *tplDir)
+	case *adbBackup:
+		err = adbBackupToZip(DefaultPkg)
+	case *adbRestore != "":
+		err = adbRestoreFromZip(DefaultPkg, *adbRestore)
+	case *adbToPC != "":
+		err = adbBackupToPC(DefaultPkg, *adbToPC)
+	case *pcToAdb != "":
+		err = adbRestoreFromPC(DefaultPkg, *pcToAdb)
 	}
 
 	if err != nil {
@@ -157,6 +172,12 @@ func printUsage() {
 	printRow("  -cm", "<PC存档目录>", "一键转打：输入 PC 存档 -> 注入模板 -> 生成时间戳备份文件夹")
 	printRow("  -pc", "<安卓目录>", "转 PC：输入安卓目录 (apps/) -> 转换为 PC 存档")
 	printRow("  -mo", "<PC存档目录>", "转移动：输入 PC 存档 -> 注入模板 -> 输出安卓目录结构")
+
+	fmt.Println("\nADB 实时模式:")
+	printRow("  -b", "", "[ADB] 备份：手机 -> balatro-arch-时间.zip")
+	printRow("  -r", "<zip文件>", "[ADB] 还原：zip -> 手机")
+	printRow("  -bp", "<PC存档目录>", "[ADB] 导出：手机 -> PC 存档目录")
+	printRow("  -rm", "<PC存档目录>", "[ADB] 注入：PC 存档 -> 手机 (只覆盖 files)")
 
 	fmt.Println("\n辅助参数:")
 	printRow("  -t", "<路径>", "[可选] 指定模板，支持'备份文件夹'或'descript.xml' 文件")
@@ -523,8 +544,11 @@ func convertToPC(androidDir, outDir string) error {
 		return err
 	}
 	fDir := filepath.Join(appsDir, pkgName, "f")
+	return convertFDirToPC(fDir, outDir)
+}
 
-	fmt.Printf("开始转换为 PC 存档: %s -> %s\n", androidDir, outDir)
+func convertFDirToPC(fDir, outDir string) error {
+	fmt.Printf("开始转换为 PC 存档: %s -> %s\n", fDir, outDir)
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
@@ -599,6 +623,25 @@ func convertToMobileInto(pcDir, outDir, pkgName string) error {
 		}
 	}
 
+	return nil
+}
+
+func convertPCToFiles(pcDir, filesDir string) error {
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		return err
+	}
+	for _, id := range []string{"1", "2", "3"} {
+		pcSlotDir := filepath.Join(pcDir, id)
+		if err := copyIfExists(filepath.Join(pcSlotDir, "profile.jkr"), filepath.Join(filesDir, id+"-profile.jkr")); err != nil {
+			return err
+		}
+		if err := copyIfExists(filepath.Join(pcSlotDir, "meta.jkr"), filepath.Join(filesDir, id+"-meta.jkr")); err != nil {
+			return err
+		}
+		if err := copyIfExists(filepath.Join(pcSlotDir, "save.jkr"), filepath.Join(filesDir, "save", "ASET", id, "save.jkr")); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -690,6 +733,132 @@ func convertAndPackFromPC(pcDir, tplDir string) error {
 	}
 
 	return packToTimestampDir(buildDir, tplDir)
+}
+
+// ---------------------------------------------------------
+// ADB
+// ---------------------------------------------------------
+
+func adbBackupToZip(pkgName string) error {
+	if err := adbCheckDevice(); err != nil {
+		return err
+	}
+	if err := adbCheckRunAs(pkgName); err != nil {
+		return err
+	}
+
+	stream, err := adbPullTarStream(pkgName, "files", "shared_prefs")
+	if err != nil {
+		return err
+	}
+
+	zipName := fmt.Sprintf("balatro-arch-%s.zip", time.Now().Format("20060102-1504"))
+	if err := tarStreamToZip(stream.stdout, zipName); err != nil {
+		_ = stream.Close()
+		return err
+	}
+	return stream.Close()
+}
+
+func adbRestoreFromZip(pkgName, zipPath string) error {
+	if err := adbCheckDevice(); err != nil {
+		return err
+	}
+	if err := adbCheckRunAs(pkgName); err != nil {
+		return err
+	}
+	if _, err := os.Stat(zipPath); err != nil {
+		return err
+	}
+
+	if ok, err := zipHasPrefix(zipPath, "files/"); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("zip 包结构不正确，未找到 files/ 目录")
+	}
+
+	if err := adbClearFiles(pkgName); err != nil {
+		return err
+	}
+
+	pr, pw := io.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		defer pw.Close()
+		errCh <- zipToTarStream(zipPath, pw)
+	}()
+
+	if err := adbPushTarStream(pkgName, pr); err != nil {
+		return err
+	}
+	return <-errCh
+}
+
+func adbBackupToPC(pkgName, outDir string) error {
+	if err := adbCheckDevice(); err != nil {
+		return err
+	}
+	if err := adbCheckRunAs(pkgName); err != nil {
+		return err
+	}
+
+	stream, err := adbPullTarStream(pkgName, "files")
+	if err != nil {
+		return err
+	}
+
+	tmpDir, err := os.MkdirTemp("", "balatro_adb_")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := extractTarStreamToDir(stream.stdout, tmpDir); err != nil {
+		_ = stream.Close()
+		return err
+	}
+	if err := stream.Close(); err != nil {
+		return err
+	}
+
+	filesDir := filepath.Join(tmpDir, "files")
+	return convertFDirToPC(filesDir, outDir)
+}
+
+func adbRestoreFromPC(pkgName, pcDir string) error {
+	if err := adbCheckDevice(); err != nil {
+		return err
+	}
+	if err := adbCheckRunAs(pkgName); err != nil {
+		return err
+	}
+
+	tmpDir, err := os.MkdirTemp("", "balatro_adb_")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	filesDir := filepath.Join(tmpDir, "files")
+	if err := convertPCToFiles(pcDir, filesDir); err != nil {
+		return err
+	}
+
+	if err := adbClearFiles(pkgName); err != nil {
+		return err
+	}
+
+	pr, pw := io.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		defer pw.Close()
+		errCh <- buildTarStreamFromDir(filesDir, pw, "files")
+	}()
+
+	if err := adbPushTarStream(pkgName, pr); err != nil {
+		return err
+	}
+	return <-errCh
 }
 
 // ---------------------------------------------------------
