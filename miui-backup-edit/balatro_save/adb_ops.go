@@ -176,9 +176,9 @@ func zipToTarStream(zipPath string, tarWriter io.Writer) error {
 			continue
 		}
 		hdr := &tar.Header{
-			Name: name,
-			Mode: 0600,
-			Size: int64(f.UncompressedSize64),
+			Name:    name,
+			Mode:    0600,
+			Size:    int64(f.UncompressedSize64),
 			ModTime: time.Now(),
 		}
 		if err := tw.WriteHeader(hdr); err != nil {

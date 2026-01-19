@@ -113,6 +113,15 @@ func main() {
 	// 	return
 	// }
 
+	wasAutoMP := isAutoKeyword(*adbToPC)
+	if err := resolvePCPaths(pcDir, moDir, cmDir, adbToPC, pcToAdb); err != nil {
+		fmt.Printf("路径解析错误: %v\n", err)
+		os.Exit(1)
+	}
+	if wasAutoMP && strings.TrimSpace(*adbToPC) != "" {
+		fmt.Printf("警告: 即将覆盖目标目录: %s\n", *adbToPC)
+	}
+
 	modeCount := countNotEmpty(*extractDir, *packDir, *pcDir, *moDir, *xpDir, *cmDir, *adbRestore, *adbToPC, *pcToAdb, *archToBak, *bakToArch)
 	if *adbBackup {
 		modeCount++
@@ -137,9 +146,9 @@ func main() {
 			break
 		}
 		if *useZip {
-				err = withZipOutput(func(outBase string) error {
-					return packToTimestampDir(*packDir, resolvedTpl, outBase, time.Time{})
-				})
+			err = withZipOutput(func(outBase string) error {
+				return packToTimestampDir(*packDir, resolvedTpl, outBase, time.Time{})
+			})
 		} else {
 			err = packToTimestampDir(*packDir, resolvedTpl, ".", time.Time{})
 		}
@@ -165,9 +174,9 @@ func main() {
 			break
 		}
 		if *useZip {
-				err = withZipOutput(func(outBase string) error {
-					return convertAndPackFromPC(*cmDir, *tplDir, outBase)
-				})
+			err = withZipOutput(func(outBase string) error {
+				return convertAndPackFromPC(*cmDir, *tplDir, outBase)
+			})
 		} else {
 			err = convertAndPackFromPC(*cmDir, *tplDir, ".")
 		}
@@ -185,9 +194,9 @@ func main() {
 			break
 		}
 		if *useZip {
-				err = withZipOutput(func(outBase string) error {
-					return convertArchiveToBackup(*archToBak, *tplDir, outBase)
-				})
+			err = withZipOutput(func(outBase string) error {
+				return convertArchiveToBackup(*archToBak, *tplDir, outBase)
+			})
 		} else {
 			err = convertArchiveToBackup(*archToBak, *tplDir, ".")
 		}
@@ -245,9 +254,9 @@ func printUsage() {
 	fmt.Println("用法: balatro_save [选项] <路径>\n")
 
 	fmt.Println("核心模式:")
-	printRow("  -x", "<备份目录>", "解包模式：输入时间戳文件夹，解压到当前目录")
+	printRow("  -x", "<备份>", "解包模式：输入备份 (.zip / 目录 / .bak)，解压到当前目录")
 	printRow("  -c", "<安卓源码目录>", "打包模式：输入 apps/ 所在的父目录，生成时间戳备份文件夹")
-	printRow("  -xp", "<备份目录>", "一键解转：输入时间戳文件夹 -> 转换并输出为 PC 存档")
+	printRow("  -xp", "<备份>", "一键解转：输入备份 (.zip / 目录 / .bak) -> 输出为 PC 存档")
 	printRow("  -cm", "<PC存档目录>", "一键转打：输入 PC 存档 -> 注入模板 -> 生成时间戳备份文件夹")
 	printRow("  -p", "<安卓目录>", "转 PC：输入安卓目录 (apps/) -> 转换为 PC 存档")
 	printRow("  -m", "<PC存档目录>", "转移动：输入 PC 存档 -> 注入模板 -> 输出安卓目录结构")
@@ -268,6 +277,7 @@ func printUsage() {
 	fmt.Println("\n辅助参数:")
 	printRow("  -t", "<路径>", "[可选] 模板输入：目录 / descript.xml / .bak / .zip")
 	printRow("", "", "用于 -c/-cm 生成 descript.xml 与包头；仅在 apps 缺失时生效")
+	printRow("  auto", "", "[路径值] 自动定位 PC 存档目录 (适用于 -m/-cm/-mp/-pm)")
 	// printRow("  -h", "", "显示帮助")
 	// printRow("  --help", "", "显示帮助")
 
@@ -318,6 +328,25 @@ func defaultOutDir(input, suffix string) string {
 
 func isZipPath(path string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path)), ".zip")
+}
+
+func isAutoKeyword(path string) bool {
+	lower := strings.ToLower(strings.TrimSpace(path))
+	return lower == "auto" || lower == "default" || lower == "def"
+}
+
+func resolvePCPaths(paths ...*string) error {
+	for _, p := range paths {
+		if p == nil || strings.TrimSpace(*p) == "" {
+			continue
+		}
+		resolved, _, err := resolvePCPath(*p)
+		if err != nil {
+			return err
+		}
+		*p = resolved
+	}
+	return nil
 }
 
 func resolveTemplatePath(baseDir, tplPath string) (string, error) {
@@ -1135,6 +1164,13 @@ func adbBackupToPC(pkgName, outDir string) error {
 	if err := adbCheckRunAs(pkgName); err != nil {
 		return err
 	}
+	if isDirNotEmpty(outDir) {
+		fmt.Printf("警告: 目标 PC 存档目录已存在数据: %s\n", outDir)
+		fmt.Println("此操作将使用手机存档【覆盖】电脑存档。")
+		if !askForConfirmation("确认继续吗？") {
+			return fmt.Errorf("用户取消操作")
+		}
+	}
 
 	stream, err := adbPullTarStream(pkgName, "files")
 	if err != nil {
@@ -1165,6 +1201,10 @@ func adbRestoreFromPC(pkgName, pcDir string) error {
 	}
 	if err := adbCheckRunAs(pkgName); err != nil {
 		return err
+	}
+	fmt.Println("警告: 此操作将使用 PC 存档【覆盖】手机存档。")
+	if !askForConfirmation("确认继续吗？") {
+		return fmt.Errorf("用户取消操作")
 	}
 
 	tmpDir, err := os.MkdirTemp("", "balatro_adb_")
@@ -1441,4 +1481,25 @@ func copyDirContents(src, dst string, excludeNames map[string]bool) error {
 		}
 		return copyFileWithMode(path, target, info.Mode())
 	})
+}
+
+func askForConfirmation(prompt string) bool {
+	fmt.Printf("%s [y/N]: ", prompt)
+	var response string
+	_, err := fmt.Scanln(&response)
+	if err != nil {
+		return false
+	}
+	response = strings.ToLower(strings.TrimSpace(response))
+	return response == "y" || response == "yes"
+}
+
+func isDirNotEmpty(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	_, err = f.Readdirnames(1)
+	return err == nil
 }
