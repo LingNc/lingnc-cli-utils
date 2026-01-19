@@ -849,7 +849,7 @@ func convertFDirToPC(fDir, outDir string) error {
 		if err := copyIfExists(filepath.Join(fDir, id+"-meta.jkr"), filepath.Join(pcSlotDir, "meta.jkr")); err != nil {
 			return err
 		}
-		if err := copyIfExists(filepath.Join(fDir, "save", "ASET", id, "save.jkr"), filepath.Join(pcSlotDir, "save.jkr")); err != nil {
+		if err := copyDirContents(filepath.Join(fDir, "save", "ASET", id), pcSlotDir, nil); err != nil {
 			return err
 		}
 	}
@@ -878,7 +878,9 @@ func convertToMobile(pcDir, outDir, fallbackPkg string) error {
 		if err := copyIfExists(filepath.Join(pcSlotDir, "meta.jkr"), filepath.Join(fDir, id+"-meta.jkr")); err != nil {
 			return err
 		}
-		if err := copyIfExists(filepath.Join(pcSlotDir, "save.jkr"), filepath.Join(fDir, "save", "ASET", id, "save.jkr")); err != nil {
+		saveDir := filepath.Join(fDir, "save", "ASET", id)
+		exclude := map[string]bool{"meta.jkr": true, "profile.jkr": true}
+		if err := copyDirContents(pcSlotDir, saveDir, exclude); err != nil {
 			return err
 		}
 	}
@@ -902,7 +904,9 @@ func convertToMobileInto(pcDir, outDir, pkgName string) error {
 		if err := copyIfExists(filepath.Join(pcSlotDir, "meta.jkr"), filepath.Join(fDir, id+"-meta.jkr")); err != nil {
 			return err
 		}
-		if err := copyIfExists(filepath.Join(pcSlotDir, "save.jkr"), filepath.Join(fDir, "save", "ASET", id, "save.jkr")); err != nil {
+		saveDir := filepath.Join(fDir, "save", "ASET", id)
+		exclude := map[string]bool{"meta.jkr": true, "profile.jkr": true}
+		if err := copyDirContents(pcSlotDir, saveDir, exclude); err != nil {
 			return err
 		}
 	}
@@ -922,7 +926,9 @@ func convertPCToFiles(pcDir, filesDir string) error {
 		if err := copyIfExists(filepath.Join(pcSlotDir, "meta.jkr"), filepath.Join(filesDir, id+"-meta.jkr")); err != nil {
 			return err
 		}
-		if err := copyIfExists(filepath.Join(pcSlotDir, "save.jkr"), filepath.Join(filesDir, "save", "ASET", id, "save.jkr")); err != nil {
+		saveDir := filepath.Join(filesDir, "save", "ASET", id)
+		exclude := map[string]bool{"meta.jkr": true, "profile.jkr": true}
+		if err := copyDirContents(pcSlotDir, saveDir, exclude); err != nil {
 			return err
 		}
 	}
@@ -1365,4 +1371,36 @@ func copyFileWithMode(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return out.Close()
+}
+
+func copyDirContents(src, dst string, excludeNames map[string]bool) error {
+	if st, err := os.Stat(src); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	} else if !st.IsDir() {
+		return nil
+	}
+
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if excludeNames != nil && excludeNames[filepath.Base(path)] {
+			return nil
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return err
+		}
+		return copyFileWithMode(path, target, info.Mode())
+	})
 }
