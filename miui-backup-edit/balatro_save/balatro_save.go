@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"flag"
 	"fmt"
@@ -17,7 +18,7 @@ const (
 	MagicMIUI    = "MIUI BACKUP"
 	MagicAndroid = "ANDROID BACKUP"
 	DefaultPkg   = "com.playstack.balatro.android"
-	Version      = "0.3.0"
+	Version      = "0.4.0"
 )
 
 type MiuiBackup struct {
@@ -71,6 +72,19 @@ type Package struct {
 	IsOnSDCard              string `xml:"isOnSDCard,omitempty"`
 }
 
+type AppHeader struct {
+	Magic1      string `json:"magic1"`
+	Version     string `json:"version"`
+	PackageName string `json:"packageName"`
+	AppLabel    string `json:"appLabel"`
+	Code1       string `json:"code1"`
+	Code2       string `json:"code2"`
+	Magic2      string `json:"magic2"`
+	AndroidVer  string `json:"androidVer"`
+	Compress    string `json:"compress"`
+	Encrypt     string `json:"encrypt"`
+}
+
 func main() {
 	extractDir := flag.String("x", "", "解包模式：输入时间戳备份目录路径 (包含 .bak)")
 	packDir := flag.String("c", "", "打包模式：输入安卓目录父路径 (包含 apps/)")
@@ -82,18 +96,20 @@ func main() {
 	adbRestore := flag.String("r", "", "[ADB] 还原：zip -> 手机")
 	adbToPC := flag.String("bp", "", "[ADB] 导出：手机 -> PC 存档目录")
 	pcToAdb := flag.String("rm", "", "[ADB] 注入：PC 存档 -> 手机")
+	useZip := flag.Bool("z", false, "启用 Zip 容器模式：输入/输出为 .zip")
 	tplDir := flag.String("t", "", "模板备份目录 (提供 _manifest / sp 等元数据)")
-	helpShort := flag.Bool("h", false, "显示帮助")
-	helpLong := flag.Bool("help", false, "显示帮助")
+	// helpShort := flag.Bool("h", false, "显示帮助")
+	// helpLong := flag.Bool("help", false, "显示帮助")
 
 	flag.Usage = printUsage
 
+	expandZipCombinedFlags()
 	flag.Parse()
 
-	if *helpShort || *helpLong {
-		printUsage()
-		return
-	}
+	// if *helpShort || *helpLong {
+	// 	printUsage()
+	// 	return
+	// }
 
 	modeCount := countNotEmpty(*extractDir, *packDir, *pcDir, *moDir, *xpDir, *cmDir, *adbRestore, *adbToPC, *pcToAdb)
 	if *adbBackup {
@@ -107,14 +123,24 @@ func main() {
 	var err error
 	switch {
 	case *extractDir != "":
-		err = extractBackupFromDir(*extractDir)
+		if *useZip {
+			err = withZipInput(*extractDir, extractBackupFromDir)
+		} else {
+			err = extractBackupFromDir(*extractDir)
+		}
 	case *packDir != "":
 		resolvedTpl, tplErr := resolveTemplatePath(*packDir, *tplDir)
 		if tplErr != nil {
 			err = tplErr
 			break
 		}
-		err = packToTimestampDir(*packDir, resolvedTpl)
+		if *useZip {
+			err = withZipOutput(func(outBase string) error {
+				return packToTimestampDir(*packDir, resolvedTpl, outBase)
+			})
+		} else {
+			err = packToTimestampDir(*packDir, resolvedTpl, ".")
+		}
 	case *pcDir != "":
 		outDir := defaultOutDir(*pcDir, "_pc")
 		err = convertToPC(*pcDir, outDir)
@@ -126,13 +152,23 @@ func main() {
 		outDir := defaultOutDir(*moDir, "_android")
 		err = convertToMobileWithTemplate(*moDir, *tplDir, outDir)
 	case *xpDir != "":
-		err = extractAndConvertToPCFromDir(*xpDir)
+		if *useZip {
+			err = withZipInput(*xpDir, extractAndConvertToPCFromDir)
+		} else {
+			err = extractAndConvertToPCFromDir(*xpDir)
+		}
 	case *cmDir != "":
 		if strings.TrimSpace(*tplDir) == "" {
 			err = fmt.Errorf("PC 转安卓模式必须指定模板路径 (-t)")
 			break
 		}
-		err = convertAndPackFromPC(*cmDir, *tplDir)
+		if *useZip {
+			err = withZipOutput(func(outBase string) error {
+				return convertAndPackFromPC(*cmDir, *tplDir, outBase)
+			})
+		} else {
+			err = convertAndPackFromPC(*cmDir, *tplDir, ".")
+		}
 	case *adbBackup:
 		err = adbBackupToZip(DefaultPkg)
 	case *adbRestore != "":
@@ -147,6 +183,29 @@ func main() {
 		fmt.Printf("执行失败: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func expandZipCombinedFlags() {
+	if len(os.Args) == 0 {
+		return
+	}
+	args := []string{os.Args[0]}
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		switch arg {
+		case "-zx":
+			args = append(args, "-z", "-x")
+		case "-zc":
+			args = append(args, "-z", "-c")
+		case "-zxp":
+			args = append(args, "-z", "-xp")
+		case "-zcm":
+			args = append(args, "-z", "-cm")
+		default:
+			args = append(args, arg)
+		}
+	}
+	os.Args = args
 }
 
 func printUsage() {
@@ -179,15 +238,19 @@ func printUsage() {
 	printRow("  -bp", "<PC存档目录>", "[ADB] 导出：手机 -> PC 存档目录")
 	printRow("  -rm", "<PC存档目录>", "[ADB] 注入：PC 存档 -> 手机 (只覆盖 files)")
 
+	fmt.Println("\nZip 容器模式:")
+	printRow("  -z", "", "启用 Zip 容器模式：输入/输出为 .zip")
+
 	fmt.Println("\n辅助参数:")
-	printRow("  -t", "<路径>", "[可选] 指定模板，支持'备份文件夹'或'descript.xml' 文件")
-	printRow("", "", "用于 -c (生成XML) 与 -cm/-mo (提取 _manifest / sp)")
-	printRow("  -h", "", "显示帮助")
-	printRow("  --help", "", "显示帮助")
+	printRow("  -t", "<路径>", "[可选] 模板输入：目录 / descript.xml / .bak / .zip")
+	printRow("", "", "用于 -c/-cm 生成 descript.xml 与包头；仅在 apps 缺失时生效")
+	// printRow("  -h", "", "显示帮助")
+	// printRow("  --help", "", "显示帮助")
 
 	fmt.Println("\n示例:")
 	fmt.Println("  解包备份:\tbalatro_save -x ./20260116_120000")
 	fmt.Println("  PC转手机:\tbalatro_save -cm ./MyPCSave -t ./OldBackup_20250101")
+	fmt.Println("  Zip解包:\tbalatro_save -x ./20260119_120000.zip -z")
 	fmt.Println("------------------------------------------------------------")
 }
 
@@ -243,7 +306,7 @@ func resolveTemplatePath(baseDir, tplPath string) (string, error) {
 	if _, err := os.Stat(xmlPath); err == nil {
 		return xmlPath, nil
 	}
-	return "", fmt.Errorf("打包模式 (-c) 需要模板 (-t)，或在 apps/descript.xml 中提供")
+	return "", nil
 }
 
 func findBakInDir(dir string) (string, error) {
@@ -297,9 +360,12 @@ func extractBackupTo(filename, outDir string) error {
 
 	fmt.Printf("正在打开文件: %s\n", filename)
 
-	offset, err := findDataOffset(file)
+	info, offset, err := parseMiuiHeader(file)
 	if err != nil {
-		return err
+		offset, err = findDataOffset(file)
+		if err != nil {
+			return err
+		}
 	}
 	fmt.Printf("检测到数据起始位置: %d 字节\n", offset)
 
@@ -351,6 +417,14 @@ func extractBackupTo(filename, outDir string) error {
 		}
 	}
 	fmt.Printf("\n解压完成！共提取 %d 个文件。\n", count)
+
+	if info != nil && info.PackageName != "" {
+		appsDir := filepath.Join(outDir, "apps")
+		if err := os.MkdirAll(appsDir, 0755); err != nil {
+			return err
+		}
+		_ = writeHeaderJSON(filepath.Join(appsDir, info.PackageName+".head.json"), info)
+	}
 	return nil
 }
 
@@ -400,17 +474,104 @@ func findDataOffset(file *os.File) (int64, error) {
 	return 0, fmt.Errorf("头部格式异常")
 }
 
+func parseMiuiHeader(file *os.File) (*AppHeader, int64, error) {
+	if _, err := file.Seek(0, 0); err != nil {
+		return nil, 0, err
+	}
+	buf := make([]byte, 4096)
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		return nil, 0, err
+	}
+	return parseMiuiHeaderFromBytes(buf[:n])
+}
+
+func parseMiuiHeaderFromBytes(data []byte) (*AppHeader, int64, error) {
+	lines := bytes.Split(data, []byte("\n"))
+	if len(lines) < 8 {
+		return nil, 0, fmt.Errorf("头部格式异常")
+	}
+	magic1 := string(lines[0])
+	if magic1 != MagicMIUI {
+		return nil, 0, fmt.Errorf("未找到有效的文件头")
+	}
+	version := string(lines[1])
+	nameLine := string(lines[2])
+	code1 := string(lines[3])
+	code2 := string(lines[4])
+	magic2 := string(lines[5])
+	androidVer := string(lines[6])
+	compress := string(lines[7])
+	encrypt := ""
+	if len(lines) > 8 {
+		encrypt = string(lines[8])
+	}
+	if magic2 != MagicAndroid {
+		return nil, 0, fmt.Errorf("未找到 ANDROID BACKUP 头")
+	}
+
+	parts := strings.SplitN(nameLine, " ", 2)
+	pkgName := strings.TrimSpace(parts[0])
+	appLabel := ""
+	if len(parts) > 1 {
+		appLabel = strings.TrimSpace(parts[1])
+	}
+
+	pattern := []byte(MagicAndroid + "\n" + androidVer + "\n" + compress + "\n" + encrypt + "\n")
+	idx := bytes.Index(data, pattern)
+	if idx == -1 {
+		return nil, 0, fmt.Errorf("头部格式异常")
+	}
+	offset := int64(idx + len(pattern))
+
+	return &AppHeader{
+		Magic1:      magic1,
+		Version:     version,
+		PackageName: pkgName,
+		AppLabel:    appLabel,
+		Code1:       code1,
+		Code2:       code2,
+		Magic2:      magic2,
+		AndroidVer:  androidVer,
+		Compress:    compress,
+		Encrypt:     encrypt,
+	}, offset, nil
+}
+
+func writeHeaderJSON(path string, info *AppHeader) error {
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func loadHeaderJSON(path string) (*AppHeader, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var info AppHeader
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
 // ---------------------------------------------------------
 // Pack
 // ---------------------------------------------------------
 
-func packToTimestampDir(androidDir, templatePath string) error {
+func packToTimestampDir(androidDir, templatePath, outputBaseDir string) error {
 	appsDir, pkgName, err := detectAppsDirAndPkg(androidDir, DefaultPkg)
 	if err != nil {
 		return err
 	}
+	if err := ensureHeaderFromTemplate(appsDir, pkgName, templatePath); err != nil {
+		return err
+	}
 
-	template, err := loadTemplate(templatePath)
+	template, err := loadTemplateForPack(appsDir, templatePath, pkgName)
 	if err != nil {
 		return err
 	}
@@ -422,19 +583,23 @@ func packToTimestampDir(androidDir, templatePath string) error {
 
 	now := time.Now()
 	nowStr := now.Format("20060102_150405")
-	if err := os.MkdirAll(nowStr, 0755); err != nil {
+	if outputBaseDir == "" {
+		outputBaseDir = "."
+	}
+	outDir := filepath.Join(outputBaseDir, nowStr)
+	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
 
 	bakFileName := fmt.Sprintf("Balatro(%s).bak", pkgName)
-	outBakPath := filepath.Join(nowStr, bakFileName)
+	outBakPath := filepath.Join(outDir, bakFileName)
 
 	size, err := createBackupTo(appsDir, outBakPath, pkgName, appLabel)
 	if err != nil {
 		return err
 	}
 
-	return generateDescriptorFromTemplate(nowStr, template, pkgName, bakFileName, size, now)
+	return generateDescriptorFromTemplate(outDir, template, pkgName, bakFileName, size, now)
 }
 
 func createBackupTo(appsDir, outPath, pkgName, appLabel string) (int64, error) {
@@ -443,9 +608,8 @@ func createBackupTo(appsDir, outPath, pkgName, appLabel string) (int64, error) {
 		return 0, err
 	}
 
-	// 头部
-	headerStr := fmt.Sprintf("%s\n2\n%s %s\n-1\n0\n%s\n5\n0\nnone\n",
-		MagicMIUI, pkgName, appLabel, MagicAndroid)
+	header := resolveHeaderForPack(appsDir, pkgName, appLabel)
+	headerStr := buildHeaderString(header)
 	if _, err := outFile.WriteString(headerStr); err != nil {
 		outFile.Close()
 		return 0, err
@@ -532,6 +696,126 @@ func createBackupTo(appsDir, outPath, pkgName, appLabel string) (int64, error) {
 		return 0, err
 	}
 	return info.Size(), nil
+}
+
+func resolveHeaderForPack(appsDir, pkgName, appLabel string) *AppHeader {
+	headerPath := filepath.Join(appsDir, pkgName+".head.json")
+	info, err := loadHeaderJSON(headerPath)
+	if err != nil {
+		info = &AppHeader{}
+	}
+	if info.Magic1 == "" {
+		info.Magic1 = MagicMIUI
+	}
+	if info.Version == "" {
+		info.Version = "2"
+	}
+	if info.PackageName == "" {
+		info.PackageName = pkgName
+	}
+	if info.AppLabel == "" {
+		info.AppLabel = appLabel
+	}
+	if info.Code1 == "" {
+		info.Code1 = "-1"
+	}
+	if info.Code2 == "" {
+		info.Code2 = "0"
+	}
+	if info.Magic2 == "" {
+		info.Magic2 = MagicAndroid
+	}
+	if info.AndroidVer == "" {
+		info.AndroidVer = "5"
+	}
+	if info.Compress == "" {
+		info.Compress = "0"
+	}
+	if info.Encrypt == "" {
+		info.Encrypt = "none"
+	}
+	return info
+}
+
+func buildHeaderString(info *AppHeader) string {
+	return fmt.Sprintf("%s\n%s\n%s %s\n%s\n%s\n%s\n%s\n%s\n%s\n",
+		info.Magic1,
+		info.Version,
+		info.PackageName,
+		info.AppLabel,
+		info.Code1,
+		info.Code2,
+		info.Magic2,
+		info.AndroidVer,
+		info.Compress,
+		info.Encrypt,
+	)
+}
+
+func loadTemplateForPack(appsDir, tplPath, pkgName string) (*MiuiBackup, error) {
+	if st, err := os.Stat(filepath.Join(appsDir, "descript.xml")); err == nil && !st.IsDir() {
+		return loadTemplate(filepath.Join(appsDir, "descript.xml"))
+	}
+	if strings.TrimSpace(tplPath) != "" {
+		return loadTemplateSmart(tplPath)
+	}
+	return defaultTemplate(pkgName), nil
+}
+
+func defaultTemplate(pkgName string) *MiuiBackup {
+	return &MiuiBackup{
+		JsonMsg:    "",
+		BakVersion: "1",
+		BrState:    "1",
+		AutoBackup: "0",
+		Packages: Packages{Package: []Package{{
+			PackageName: pkgName,
+			AppLabel:    "Balatro",
+		}},
+		},
+	}
+}
+
+func ensureHeaderFromTemplate(appsDir, pkgName, tplPath string) error {
+	if strings.TrimSpace(tplPath) == "" {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(appsDir, pkgName+".head.json")); err == nil {
+		return nil
+	}
+
+	var info *AppHeader
+	var err error
+	low := strings.ToLower(tplPath)
+	switch {
+	case strings.HasSuffix(low, ".zip"):
+		info, err = readBakHeaderFromZip(tplPath)
+	case strings.HasSuffix(low, ".bak"):
+		info, err = parseMiuiHeaderFromBak(tplPath)
+	default:
+		bakPath, findErr := findBakInDir(tplPath)
+		if findErr != nil {
+			return nil
+		}
+		info, err = parseMiuiHeaderFromBak(bakPath)
+	}
+	if err != nil {
+		return err
+	}
+	if info == nil {
+		return nil
+	}
+	return writeHeaderJSON(filepath.Join(appsDir, info.PackageName+".head.json"), info)
+}
+
+func parseMiuiHeaderFromBak(bakPath string) (*AppHeader, error) {
+	file, err := os.Open(bakPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, _, err := parseMiuiHeader(file)
+	return info, err
 }
 
 // ---------------------------------------------------------
@@ -654,7 +938,13 @@ func convertToMobileWithTemplate(pcDir, tplDir, outDir string) error {
 }
 
 func buildAndroidWithTemplate(pcDir, tplDir, outDir string) (string, error) {
-	tplBak, err := findBakInDir(tplDir)
+	resolvedTpl, cleanup, err := resolveTemplateDir(tplDir)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+
+	tplBak, err := findBakInDir(resolvedTpl)
 	if err != nil {
 		return "", err
 	}
@@ -720,7 +1010,7 @@ func extractAndConvertToPC(bakPath string) error {
 	return convertToPC(tmpDir, outDir)
 }
 
-func convertAndPackFromPC(pcDir, tplDir string) error {
+func convertAndPackFromPC(pcDir, tplDir, outputBaseDir string) error {
 	tmpDir, err := os.MkdirTemp("", "balatro_mobile_")
 	if err != nil {
 		return err
@@ -732,7 +1022,7 @@ func convertAndPackFromPC(pcDir, tplDir string) error {
 		return err
 	}
 
-	return packToTimestampDir(buildDir, tplDir)
+	return packToTimestampDir(buildDir, tplDir, outputBaseDir)
 }
 
 // ---------------------------------------------------------
