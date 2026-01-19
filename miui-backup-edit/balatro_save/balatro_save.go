@@ -1043,7 +1043,7 @@ func adbBackupToZip(pkgName string) error {
 		return err
 	}
 
-	stream, err := adbPullTarStream(pkgName, "files", "shared_prefs")
+	stream, err := adbPullTarStream(pkgName, "files")
 	if err != nil {
 		return err
 	}
@@ -1065,6 +1065,11 @@ func adbRestoreFromZip(pkgName, zipPath string) error {
 	}
 	if _, err := os.Stat(zipPath); err != nil {
 		return err
+	}
+	if ok, err := zipHasMarker(zipPath); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("zip 校验失败：缺少 ADB 标识文件")
 	}
 
 	if ok, err := zipHasPrefix(zipPath, "files/"); err != nil {

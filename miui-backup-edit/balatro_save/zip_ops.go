@@ -117,7 +117,6 @@ func unzipToDir(zipPath, targetDir string) error {
 }
 
 func zipDirRecursively(srcDir, zipPath string) error {
-	baseName := filepath.Base(srcDir)
 	outFile, err := os.Create(zipPath)
 	if err != nil {
 		return err
@@ -126,14 +125,6 @@ func zipDirRecursively(srcDir, zipPath string) error {
 
 	zw := zip.NewWriter(outFile)
 	defer zw.Close()
-
-	marker, err := zw.Create(zipMarkerName)
-	if err != nil {
-		return err
-	}
-	if _, err := marker.Write([]byte("balatro-zip")); err != nil {
-		return err
-	}
 
 	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -146,7 +137,7 @@ func zipDirRecursively(srcDir, zipPath string) error {
 		if err != nil {
 			return err
 		}
-		name := filepath.ToSlash(filepath.Join(baseName, rel))
+		name := filepath.ToSlash(rel)
 		w, err := zw.Create(name)
 		if err != nil {
 			return err

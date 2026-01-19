@@ -97,6 +97,14 @@ func tarStreamToZip(tarStream io.Reader, outZip string) error {
 	zw := zip.NewWriter(outFile)
 	defer zw.Close()
 
+	marker, err := zw.Create(zipMarkerName)
+	if err != nil {
+		return err
+	}
+	if _, err := marker.Write([]byte("balatro-adb")); err != nil {
+		return err
+	}
+
 	tr := tar.NewReader(tarStream)
 	for {
 		hdr, err := tr.Next()
@@ -133,6 +141,9 @@ func zipToTarStream(zipPath string, tarWriter io.Writer) error {
 
 	for _, f := range r.File {
 		name := filepath.ToSlash(strings.TrimPrefix(f.Name, "./"))
+		if name == zipMarkerName {
+			continue
+		}
 		if name == "" || strings.HasSuffix(name, "/") {
 			continue
 		}
@@ -156,6 +167,22 @@ func zipToTarStream(zipPath string, tarWriter io.Writer) error {
 		fr.Close()
 	}
 	return nil
+}
+
+func zipHasMarker(zipPath string) (bool, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return false, err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		name := strings.TrimPrefix(filepath.ToSlash(f.Name), "./")
+		if name == zipMarkerName {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func zipHasPrefix(zipPath, prefix string) (bool, error) {
