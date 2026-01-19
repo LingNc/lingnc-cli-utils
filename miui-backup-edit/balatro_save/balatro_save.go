@@ -88,14 +88,16 @@ type AppHeader struct {
 func main() {
 	extractDir := flag.String("x", "", "解包模式：输入时间戳备份目录路径 (包含 .bak)")
 	packDir := flag.String("c", "", "打包模式：输入安卓目录父路径 (包含 apps/)")
-	pcDir := flag.String("pc", "", "转 PC：输入安卓目录路径 (包含 apps/)")
-	moDir := flag.String("mo", "", "转移动：输入 PC 存档目录路径")
+	pcDir := flag.String("p", "", "转 PC：输入安卓目录路径 (包含 apps/)")
+	moDir := flag.String("m", "", "转移动：输入 PC 存档目录路径")
 	xpDir := flag.String("xp", "", "一键解转：输入时间戳备份目录路径")
 	cmDir := flag.String("cm", "", "一键转打：输入 PC 存档目录路径")
-	adbBackup := flag.Bool("b", false, "[ADB] 备份：手机 -> balatro-arch-时间.zip")
-	adbRestore := flag.String("r", "", "[ADB] 还原：zip -> 手机")
-	adbToPC := flag.String("bp", "", "[ADB] 导出：手机 -> PC 存档目录")
-	pcToAdb := flag.String("rm", "", "[ADB] 注入：PC 存档 -> 手机")
+	adbBackup := flag.Bool("a", false, "[ADB] 获取归档：手机 -> balatro-archive-时间.zip")
+	adbRestore := flag.String("r", "", "[ADB] 还原归档：zip -> 手机")
+	adbToPC := flag.String("mp", "", "[ADB] 归档转PC：手机 -> PC 存档目录")
+	pcToAdb := flag.String("pm", "", "[ADB] PC转手机：PC 存档 -> 手机")
+	archToBak := flag.String("ab", "", "转换：归档(zip) -> MIUI 备份 (需 -t)")
+	bakToArch := flag.String("ba", "", "转换：MIUI 备份 -> 归档(zip)")
 	useZip := flag.Bool("z", false, "启用 Zip 容器模式：输入/输出为 .zip")
 	tplDir := flag.String("t", "", "模板备份目录 (提供 _manifest / sp 等元数据)")
 	// helpShort := flag.Bool("h", false, "显示帮助")
@@ -111,7 +113,7 @@ func main() {
 	// 	return
 	// }
 
-	modeCount := countNotEmpty(*extractDir, *packDir, *pcDir, *moDir, *xpDir, *cmDir, *adbRestore, *adbToPC, *pcToAdb)
+	modeCount := countNotEmpty(*extractDir, *packDir, *pcDir, *moDir, *xpDir, *cmDir, *adbRestore, *adbToPC, *pcToAdb, *archToBak, *bakToArch)
 	if *adbBackup {
 		modeCount++
 	}
@@ -177,6 +179,20 @@ func main() {
 		err = adbBackupToPC(DefaultPkg, *adbToPC)
 	case *pcToAdb != "":
 		err = adbRestoreFromPC(DefaultPkg, *pcToAdb)
+	case *archToBak != "":
+		if strings.TrimSpace(*tplDir) == "" {
+			err = fmt.Errorf("归档转备份必须指定模板路径 (-t)")
+			break
+		}
+		if *useZip {
+			err = withZipOutput(func(outBase string) error {
+				return convertArchiveToBackup(*archToBak, *tplDir, outBase)
+			})
+		} else {
+			err = convertArchiveToBackup(*archToBak, *tplDir, ".")
+		}
+	case *bakToArch != "":
+		err = convertBackupToArchive(*bakToArch)
 	}
 
 	if err != nil {
@@ -229,17 +245,21 @@ func printUsage() {
 	printRow("  -c", "<安卓源码目录>", "打包模式：输入 apps/ 所在的父目录，生成时间戳备份文件夹")
 	printRow("  -xp", "<备份目录>", "一键解转：输入时间戳文件夹 -> 转换并输出为 PC 存档")
 	printRow("  -cm", "<PC存档目录>", "一键转打：输入 PC 存档 -> 注入模板 -> 生成时间戳备份文件夹")
-	printRow("  -pc", "<安卓目录>", "转 PC：输入安卓目录 (apps/) -> 转换为 PC 存档")
-	printRow("  -mo", "<PC存档目录>", "转移动：输入 PC 存档 -> 注入模板 -> 输出安卓目录结构")
+	printRow("  -p", "<安卓目录>", "转 PC：输入安卓目录 (apps/) -> 转换为 PC 存档")
+	printRow("  -m", "<PC存档目录>", "转移动：输入 PC 存档 -> 注入模板 -> 输出安卓目录结构")
 
 	fmt.Println("\nADB 实时模式:")
-	printRow("  -b", "", "[ADB] 备份：手机 -> balatro-arch-时间.zip")
-	printRow("  -r", "<zip文件>", "[ADB] 还原：zip -> 手机")
-	printRow("  -bp", "<PC存档目录>", "[ADB] 导出：手机 -> PC 存档目录")
-	printRow("  -rm", "<PC存档目录>", "[ADB] 注入：PC 存档 -> 手机 (只覆盖 files)")
+	printRow("  -a", "", "[ADB] 获取归档：手机 -> balatro-archive-时间.zip")
+	printRow("  -r", "<zip文件>", "[ADB] 还原归档：zip -> 手机")
+	printRow("  -mp", "<PC存档目录>", "[ADB] 归档转PC：手机 -> PC 存档目录")
+	printRow("  -pm", "<PC存档目录>", "[ADB] PC转手机：PC 存档 -> 手机 (只覆盖 files)")
 
 	fmt.Println("\nZip 容器模式:")
 	printRow("  -z", "", "启用 Zip 容器模式：输入/输出为 .zip")
+
+	fmt.Println("\n格式转换:")
+	printRow("  -ab", "<归档zip>", "归档 -> MIUI 备份 (需 -t)")
+	printRow("  -ba", "<备份>", "MIUI 备份 -> 归档zip")
 
 	fmt.Println("\n辅助参数:")
 	printRow("  -t", "<路径>", "[可选] 模板输入：目录 / descript.xml / .bak / .zip")
@@ -251,6 +271,7 @@ func printUsage() {
 	fmt.Println("  解包备份:\tbalatro_save -x ./20260116_120000")
 	fmt.Println("  PC转手机:\tbalatro_save -cm ./MyPCSave -t ./OldBackup_20250101")
 	fmt.Println("  Zip解包:\tbalatro_save -x ./20260119_120000.zip -z")
+	fmt.Println("  归档导出:\tbalatro_save -a")
 	fmt.Println("------------------------------------------------------------")
 }
 
@@ -1048,7 +1069,7 @@ func adbBackupToZip(pkgName string) error {
 		return err
 	}
 
-	zipName := fmt.Sprintf("balatro-arch-%s.zip", time.Now().Format("20060102-1504"))
+	zipName := fmt.Sprintf("balatro-archive-%s.zip", time.Now().Format("20060102-1504"))
 	if err := tarStreamToZip(stream.stdout, zipName); err != nil {
 		_ = stream.Close()
 		return err

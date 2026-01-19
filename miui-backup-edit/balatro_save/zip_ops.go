@@ -154,6 +154,55 @@ func zipDirRecursively(srcDir, zipPath string) error {
 	})
 }
 
+func zipArchiveWithMarker(srcDir, zipPath string) error {
+	outFile, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	zw := zip.NewWriter(outFile)
+	defer zw.Close()
+
+	marker, err := zw.Create(zipMarkerName)
+	if err != nil {
+		return err
+	}
+	if _, err := marker.Write([]byte("balatro-archive")); err != nil {
+		return err
+	}
+
+	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		name := filepath.ToSlash(rel)
+		if name == zipMarkerName {
+			return nil
+		}
+		w, err := zw.Create(name)
+		if err != nil {
+			return err
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(w, in); err != nil {
+			in.Close()
+			return err
+		}
+		return in.Close()
+	})
+}
+
 func validateBackupZip(zipPath string) (string, error) {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
