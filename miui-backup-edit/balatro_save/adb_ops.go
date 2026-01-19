@@ -71,12 +71,36 @@ func (s *adbTarStream) Close() error {
 }
 
 func adbPushTarStream(pkgName string, tarStream io.Reader) error {
-	cmd := exec.Command("adb", "shell", fmt.Sprintf("run-as %s tar -xf -", pkgName))
-	cmd.Stdin = tarStream
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("adb 推送失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
+	tmpFile, err := os.CreateTemp("", "balatro_restore_*.tar")
+	if err != nil {
+		return fmt.Errorf("创建本地临时文件失败: %v", err)
 	}
-	return nil
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := io.Copy(tmpFile, tarStream); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("写入临时 tar 文件失败: %v", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("关闭临时 tar 文件失败: %v", err)
+	}
+
+	deviceTmpPath := fmt.Sprintf("/data/local/tmp/balatro_restore_%d.tar", time.Now().UnixNano())
+	pushCmd := exec.Command("adb", "push", tmpPath, deviceTmpPath)
+	if out, err := pushCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("adb push 失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	extractCmdStr := fmt.Sprintf("cat %s | run-as %s tar -xf -", deviceTmpPath, pkgName)
+	extractCmd := exec.Command("adb", "shell", extractCmdStr)
+	var extractErr error
+	if out, err := extractCmd.CombinedOutput(); err != nil {
+		extractErr = fmt.Errorf("设备端解压失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	_ = exec.Command("adb", "shell", "rm", deviceTmpPath).Run()
+	return extractErr
 }
 
 func adbClearFiles(pkgName string) error {
