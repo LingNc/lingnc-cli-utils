@@ -94,6 +94,10 @@ func main() {
 	cmDir := flag.String("cm", "", "一键转打：输入 PC 存档目录路径")
 	adbBackup := flag.Bool("a", false, "[ADB] 获取归档：手机 -> balatro-archive-时间.zip")
 	adbRestore := flag.String("r", "", "[ADB] 还原归档：zip -> 手机")
+	paDir := flag.String("pa", "", "PC打包归档：PC 存档 -> 归档zip (输出当前目录自动命名)")
+	rpDir := flag.String("rp", "", "归档还原PC：归档zip -> PC 存档 (默认auto路径，可用 -p 指定)")
+	maFlag := flag.Bool("ma", false, "兼容选项：同 -a (移动端打包为归档)")
+	rmDir := flag.String("rm", "", "兼容选项：同 -r (归档还原到移动端)")
 	adbToPC := flag.String("mp", "", "[ADB] 归档转PC：手机 -> PC 存档目录")
 	pcToAdb := flag.String("pm", "", "[ADB] PC转手机：PC 存档 -> 手机")
 	archToBak := flag.String("ab", "", "转换：归档(zip) -> MIUI 备份 (需 -t)")
@@ -107,6 +111,33 @@ func main() {
 
 	expandZipCombinedFlags()
 	flag.Parse()
+
+	if *maFlag {
+		*adbBackup = true
+	}
+	if *rmDir != "" {
+		*adbRestore = *rmDir
+	}
+
+	targetPCDir := ""
+	if *rpDir != "" {
+		if strings.TrimSpace(*pcDir) != "" {
+			resolved, _, err := resolvePCPath(*pcDir)
+			if err != nil {
+				fmt.Printf("路径解析错误: %v\n", err)
+				os.Exit(1)
+			}
+			targetPCDir = resolved
+			*pcDir = ""
+		} else {
+			resolved, _, err := resolvePCPath("auto")
+			if err != nil {
+				fmt.Printf("路径解析错误: %v\n", err)
+				os.Exit(1)
+			}
+			targetPCDir = resolved
+		}
+	}
 
 	// if *helpShort || *helpLong {
 	// 	printUsage()
@@ -122,7 +153,7 @@ func main() {
 		fmt.Printf("警告: 即将覆盖目标目录: %s\n", *adbToPC)
 	}
 
-	modeCount := countNotEmpty(*extractDir, *packDir, *pcDir, *moDir, *xpDir, *cmDir, *adbRestore, *adbToPC, *pcToAdb, *archToBak, *bakToArch)
+	modeCount := countNotEmpty(*extractDir, *packDir, *pcDir, *moDir, *xpDir, *cmDir, *adbRestore, *adbToPC, *pcToAdb, *archToBak, *bakToArch, *paDir, *rpDir)
 	if *adbBackup {
 		modeCount++
 	}
@@ -188,6 +219,15 @@ func main() {
 		err = adbBackupToPC(DefaultPkg, *adbToPC)
 	case *pcToAdb != "":
 		err = adbRestoreFromPC(DefaultPkg, *pcToAdb)
+	case *paDir != "":
+		resolved, _, err := resolvePCPath(*paDir)
+		if err != nil {
+			err = err
+			break
+		}
+		err = packPCToArchive(resolved)
+	case *rpDir != "":
+		err = restoreArchiveToPC(*rpDir, targetPCDir)
 	case *archToBak != "":
 		if strings.TrimSpace(*tplDir) == "" {
 			err = fmt.Errorf("归档转备份必须指定模板路径 (-t)")
@@ -239,7 +279,7 @@ func expandZipCombinedFlags() {
 
 func printUsage() {
 	const (
-		col1Width = 6  // flag 列宽 (如 "  -cm")
+		col1Width = 12 // flag 列宽 (如 "  -r / -rm")
 		col2Width = 16 // 参数列宽 (如 "<安卓源码目录>")
 	)
 
@@ -261,9 +301,14 @@ func printUsage() {
 	printRow("  -p", "<安卓目录>", "转 PC：输入安卓目录 (apps/) -> 转换为 PC 存档")
 	printRow("  -m", "<PC存档目录>", "转移动：输入 PC 存档 -> 注入模板 -> 输出安卓目录结构")
 
+	fmt.Println("\nPC <-> 归档 模式:")
+	printRow("  -pa", "<PC存档目录>", "打包PC至归档：PC 存档 -> 归档zip (输出当前目录自动命名)")
+	printRow("  -rp", "<输入zip>", "归档还原至PC：归档zip -> PC 存档 (默认还原到 auto 路径)")
+	printRow("", "", "  *-rp 可配合 -p <指定路径> 覆盖默认的 PC 存档位置")
+
 	fmt.Println("\nADB 实时模式:")
-	printRow("  -a", "", "[ADB] 获取归档：手机 -> balatro-archive-时间.zip")
-	printRow("  -r", "<zip文件>", "[ADB] 还原归档：zip -> 手机")
+	printRow("  -a / -ma", "", "[ADB] 获取归档：手机 -> balatro-archive-时间.zip")
+	printRow("  -r / -rm", "<zip文件>", "[ADB] 还原归档：zip -> 手机")
 	printRow("  -mp", "<PC存档目录>", "[ADB] 归档转PC：手机 -> PC 存档目录")
 	printRow("  -pm", "<PC存档目录>", "[ADB] PC转手机：PC 存档 -> 手机 (只覆盖 files)")
 
@@ -285,6 +330,8 @@ func printUsage() {
 	fmt.Println("  解包备份:\tbalatro_save -x ./20260116_120000")
 	fmt.Println("  PC转手机:\tbalatro_save -cm ./MyPCSave -t ./OldBackup_20250101")
 	fmt.Println("  Zip解包:\tbalatro_save -x ./20260119_120000.zip -z")
+	fmt.Println("  PC打包归档:\tbalatro_save -pa ./MyPCSave")
+	fmt.Println("  归档还原PC:\tbalatro_save -rp ./balatro-archive.zip -p ./MyPCSave")
 	fmt.Println("  归档导出:\tbalatro_save -a")
 	fmt.Println("------------------------------------------------------------")
 }
