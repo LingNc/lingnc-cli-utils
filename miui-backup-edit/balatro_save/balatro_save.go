@@ -94,7 +94,7 @@ func main() {
 	cmDir := flag.String("cm", "", "一键转打：输入 PC 存档目录路径")
 	adbBackup := flag.Bool("a", false, "[ADB] 获取归档：手机 -> balatro-archive-时间.zip")
 	adbRestore := flag.String("r", "", "[ADB] 还原归档：zip -> 手机")
-	paDir := flag.String("pa", "", "PC打包归档：PC 存档 -> 归档zip (输出当前目录自动命名)")
+	paDir := flag.String("pa", "", "PC打包归档：PC 存档 -> 归档zip (默认 auto 路径，输出当前目录自动命名)")
 	rpDir := flag.String("rp", "", "归档还原PC：归档zip -> PC 存档 (默认auto路径，可用 -p 指定)")
 	maFlag := flag.Bool("ma", false, "兼容选项：同 -a (移动端打包为归档)")
 	rmDir := flag.String("rm", "", "兼容选项：同 -r (归档还原到移动端)")
@@ -110,6 +110,7 @@ func main() {
 	flag.Usage = printUsage
 
 	expandZipCombinedFlags()
+	expandDefaultAutoArgs()
 	flag.Parse()
 
 	if *maFlag {
@@ -277,6 +278,31 @@ func expandZipCombinedFlags() {
 	os.Args = args
 }
 
+func expandDefaultAutoArgs() {
+	if len(os.Args) == 0 {
+		return
+	}
+	defaults := map[string]bool{
+		"-pa": true,
+		"-m":  true,
+		"-cm": true,
+		"-mp": true,
+		"-pm": true,
+	}
+	args := []string{os.Args[0]}
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		args = append(args, arg)
+		if !defaults[arg] {
+			continue
+		}
+		if i+1 >= len(os.Args) || strings.HasPrefix(os.Args[i+1], "-") {
+			args = append(args, "auto")
+		}
+	}
+	os.Args = args
+}
+
 func printUsage() {
 	const (
 		col1Width = 12 // flag 列宽 (如 "  -r / -rm")
@@ -297,20 +323,20 @@ func printUsage() {
 	printRow("  -x", "<备份>", "解包模式：输入备份 (.zip / 目录 / .bak)，解压到当前目录")
 	printRow("  -c", "<安卓源码目录>", "打包模式：输入 apps/ 所在的父目录，生成时间戳备份文件夹")
 	printRow("  -xp", "<备份>", "一键解转：输入备份 (.zip / 目录 / .bak) -> 输出为 PC 存档")
-	printRow("  -cm", "<PC存档目录>", "一键转打：输入 PC 存档 -> 注入模板 -> 生成时间戳备份文件夹")
+	printRow("  -cm", "<PC存档目录>", "一键转打：输入 PC 存档 -> 注入模板 -> 生成时间戳备份文件夹 (默认 auto)")
 	printRow("  -p", "<安卓目录>", "转 PC：输入安卓目录 (apps/) -> 转换为 PC 存档")
-	printRow("  -m", "<PC存档目录>", "转移动：输入 PC 存档 -> 注入模板 -> 输出安卓目录结构")
+	printRow("  -m", "<PC存档目录>", "转移动：输入 PC 存档 -> 注入模板 -> 输出安卓目录结构 (默认 auto)")
 
 	fmt.Println("\nPC <-> 归档 模式:")
-	printRow("  -pa", "<PC存档目录>", "打包PC至归档：PC 存档 -> 归档zip (输出当前目录自动命名)")
+	printRow("  -pa", "<PC存档目录>", "打包PC至归档：PC 存档 -> 归档zip (默认 auto 路径，输出当前目录自动命名)")
 	printRow("  -rp", "<输入zip>", "归档还原至PC：归档zip -> PC 存档 (默认还原到 auto 路径)")
 	printRow("", "", "  *-rp 可配合 -p <指定路径> 覆盖默认的 PC 存档位置")
 
 	fmt.Println("\nADB 实时模式:")
 	printRow("  -a / -ma", "", "[ADB] 获取归档：手机 -> balatro-archive-时间.zip")
 	printRow("  -r / -rm", "<zip文件>", "[ADB] 还原归档：zip -> 手机")
-	printRow("  -mp", "<PC存档目录>", "[ADB] 归档转PC：手机 -> PC 存档目录")
-	printRow("  -pm", "<PC存档目录>", "[ADB] PC转手机：PC 存档 -> 手机 (只覆盖 files)")
+	printRow("  -mp", "<PC存档目录>", "[ADB] 归档转PC：手机 -> PC 存档目录 (默认 auto)")
+	printRow("  -pm", "<PC存档目录>", "[ADB] PC转手机：PC 存档 -> 手机 (只覆盖 files，默认 auto)")
 
 	fmt.Println("\nZip 容器模式:")
 	printRow("  -z", "", "启用 Zip 容器模式：输入/输出为 .zip")
@@ -322,7 +348,7 @@ func printUsage() {
 	fmt.Println("\n辅助参数:")
 	printRow("  -t", "<路径>", "[可选] 模板输入：目录 / descript.xml / .bak / .zip")
 	printRow("", "", "用于 -c/-cm 生成 descript.xml 与包头；仅在 apps 缺失时生效")
-	printRow("  auto", "", "[路径值] 自动定位 PC 存档目录 (适用于 -m/-cm/-mp/-pm)")
+	printRow("  auto", "", "[路径值] 自动定位 PC 存档目录 (适用于 -pa/-m/-cm/-mp/-pm)")
 	// printRow("  -h", "", "显示帮助")
 	// printRow("  --help", "", "显示帮助")
 
@@ -330,7 +356,7 @@ func printUsage() {
 	fmt.Println("  解包备份:\tbalatro_save -x ./20260116_120000")
 	fmt.Println("  PC转手机:\tbalatro_save -cm ./MyPCSave -t ./OldBackup_20250101")
 	fmt.Println("  Zip解包:\tbalatro_save -x ./20260119_120000.zip -z")
-	fmt.Println("  PC打包归档:\tbalatro_save -pa ./MyPCSave")
+	fmt.Println("  PC打包归档:\tbalatro_save -pa")
 	fmt.Println("  归档还原PC:\tbalatro_save -rp ./balatro-archive.zip -p ./MyPCSave")
 	fmt.Println("  归档导出:\tbalatro_save -a")
 	fmt.Println("------------------------------------------------------------")
