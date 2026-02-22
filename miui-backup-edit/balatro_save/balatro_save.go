@@ -18,7 +18,7 @@ const (
 	MagicMIUI    = "MIUI BACKUP"
 	MagicAndroid = "ANDROID BACKUP"
 	DefaultPkg   = "com.playstack.balatro.android"
-	Version      = "0.5.1"
+	Version      = "0.5.2"
 )
 
 type MiuiBackup struct {
