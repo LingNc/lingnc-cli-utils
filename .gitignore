@@ -1,10 +1,17 @@
+# 排除所有文件夹和文件
 *
-!*/
-
+# 保留一级目录中所有带后缀的文件
 !/*.*
-!easy-tun-proxy/
-!multi-user-sapce
-!npc-install
+# 保留二级目录及更深层的所有文件夹
+!/*/**/
+# 保留二级目录中及更深层的所有带后缀文件
+!/*/**/*.*
 
 !LICENSE
 !NOTICE
+
+# 保留一级目录
+!/easy-tun-proxy
+!/multi-user-sapce
+!/npc-install
+!/miui-backup-edit
