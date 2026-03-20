@@ -104,7 +104,16 @@ func adbPushTarStream(pkgName string, tarStream io.Reader) error {
 }
 
 func adbClearFiles(pkgName string) error {
-	cmd := exec.Command("adb", "shell", fmt.Sprintf("run-as %s rm -rf files/*.jkr files/save", pkgName))
+	// Only remove slot-specific save data to avoid wiping global config like settings.jkr.
+	targetFiles := []string{
+		"files/1-profile.jkr", "files/1-meta.jkr", "files/save/ASET/1",
+		"files/2-profile.jkr", "files/2-meta.jkr", "files/save/ASET/2",
+		"files/3-profile.jkr", "files/3-meta.jkr", "files/save/ASET/3",
+	}
+
+	targetStr := strings.Join(targetFiles, " ")
+	cmdStr := fmt.Sprintf("run-as %s rm -rf %s", pkgName, targetStr)
+	cmd := exec.Command("adb", "shell", cmdStr)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("清理旧存档失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
 	}

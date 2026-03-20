@@ -144,3 +144,45 @@ func convertBackupToArchive(bakInput string) error {
 	zipName := fmt.Sprintf("balatro-archive-%s.zip", srcTime.Format("20060102-1504"))
 	return zipArchiveWithMarker(archDir, zipName, srcTime)
 }
+
+func packPCToArchive(pcDir string) error {
+	tmpDir, err := os.MkdirTemp("", "balatro_pa_")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	filesDir := filepath.Join(tmpDir, "files")
+	if err := convertPCToFiles(pcDir, filesDir); err != nil {
+		return err
+	}
+
+	now := time.Now()
+	zipName := fmt.Sprintf("balatro-archive-%s.zip", now.Format("20060102-1504"))
+	return zipArchiveWithMarker(tmpDir, zipName, now)
+}
+
+func restoreArchiveToPC(zipPath, pcDir string) error {
+	if ok, err := zipHasMarker(zipPath); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("归档校验失败：缺少标识文件")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "balatro_rp_")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := unzipToDir(zipPath, tmpDir); err != nil {
+		return err
+	}
+
+	filesDir := filepath.Join(tmpDir, "files")
+	if st, err := os.Stat(filesDir); err != nil || !st.IsDir() {
+		return fmt.Errorf("归档结构无效：缺少 files/ 目录")
+	}
+
+	return convertFDirToPC(filesDir, pcDir)
+}
