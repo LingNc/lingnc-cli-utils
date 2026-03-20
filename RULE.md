@@ -52,14 +52,11 @@ git merge --no-ff --no-commit develop
 git rm -r -f PLAN.md RULE.md 2>/dev/null || echo "文件夹不存在，跳过清理"
 
 # 4. 提交合并，生成版本节点
-git commit -m "xxxxx vx.x.x"
+git commit -m "tool: xxxxxx工具开发"
 
-# 5. 打标签
-git tag -a vx.x.x -m "xxxxx vx.x.x"
-
-# 6. 推送
+# 5. 推送
 git push origin main --tags
 ```
 5. 修复：如果发布后发现有严重 bug
-从 main 切出 fix/<工具名>/vx.x.x 分支进行修复
+从 main 切出 fix/<工具名>/<版本/特性分支> 分支进行修复
 测试稳定后合并回develop和main
