@@ -1,0 +1,6 @@
+assert/
+*.zip
+apps/
+Balatro*_pc
+
+*.exe
