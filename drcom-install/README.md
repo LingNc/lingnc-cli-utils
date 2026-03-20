@@ -9,6 +9,9 @@
 - `install.sh`: Linux 一键安装脚本（systemd）
 - `install.bat`: Windows 一键安装入口
 - `install.ps1`: Windows 安装逻辑（配置渲染 + 计划任务）
+- `uninstall.sh`: Linux 卸载脚本
+- `uninstall.bat`: Windows 卸载入口
+- `uninstall.ps1`: Windows 卸载逻辑
 
 ## Linux 安装
 
@@ -40,6 +43,12 @@ journalctl -u dogcom -f
 systemctl restart dogcom
 ```
 
+Linux 卸载:
+
+```bash
+sudo ./uninstall.sh
+```
+
 ## Windows 安装
 
 1. 确保当前目录内有 `dogcom.exe`（或 `dogcom`）和 `drcom.conf`
@@ -59,6 +68,12 @@ systemctl restart dogcom
 schtasks /Query /TN Dogcom /V /FO LIST
 schtasks /Run /TN Dogcom
 type C:\ProgramData\Dogcom\dogcom.log
+```
+
+Windows 卸载:
+
+```bat
+uninstall.bat
 ```
 
 ## 日志过滤规则
