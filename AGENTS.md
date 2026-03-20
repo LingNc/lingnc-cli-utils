@@ -22,10 +22,18 @@
 该栏目存放当前正在开发的小工具的进度、日志、开发规范、使用说明、文档对应文件名等。该部分应在离开该技能对应开发分支时清除对应的内容。当首次开发该工具时应开始建补充对应的内容，若不需要再保持空。
 
 ### 开发目标
+- 完成 dogcom 客户端自动化安装与服务化部署（Linux/Windows）。
 ### 开发规范
+- Linux 使用 systemd 守护并过滤 Keepalive 十六进制冗余日志。
+- Windows 使用计划任务实现开机自启，并生成运行日志。
 ### 开发进度
+- 已完成 `drcom-install/install.sh`：配置渲染、包装器生成、systemd 注册。
+- 已完成 `drcom-install/install.bat` + `drcom-install/install.ps1`：配置渲染、计划任务注册。
 ### 最新变更
+- 新增 `drcom-install/README.md`，补充安装与验收说明。
+- 已更新顶层 `README.md` 与 `PLAN.md`。
 ### 参考文档
+- https://github.com/mchome/dogcom
 
 ---
 
