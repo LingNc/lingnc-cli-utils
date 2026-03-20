@@ -1,0 +1,1235 @@
+#!/bin/bash
+set -euo pipefail
+
+# ==========================================
+# i18n module
+# ==========================================
+detect_language() {
+    if [[ "${MULTIUSER_LANG:-}" == "cn" ]] || [[ "${MULTIUSER_LANG:-}" == "zh" ]]; then
+        CURRENT_LANG="cn"
+    elif [[ "${LANG:-}" == *"CN"* ]] || [[ "${LANG:-}" == *"zh"* ]]; then
+        CURRENT_LANG="cn"
+    else
+        CURRENT_LANG="en"
+    fi
+}
+
+declare -A MSG
+
+load_messages() {
+    if [ "$CURRENT_LANG" = "cn" ]; then
+        MSG[ERR_ROOT_REQUIRED]="此操作需要 Root 权限！"
+        MSG[ERR_MISSING_CMD]="未找到命令: %s"
+        MSG[ERR_UNKNOWN_OPTION]="未知选项: %s"
+        MSG[ERR_UNKNOWN_MODULE]="未知模块: %s"
+        MSG[ERR_UNKNOWN_MODULE_ACTION]="未知模块操作: %s"
+        MSG[ERR_MISSING_PARAM]="缺少参数: %s"
+        MSG[ERR_CACHE_DOCKER_MISSING]="缺少 Docker 缓存，请运行: sudo %s sys init"
+        MSG[ERR_CACHE_BREW_MISSING]="缺少 Homebrew 缓存，请运行: sudo %s sys init"
+
+        MSG[LOG_SYS_INIT_DEPENDS]="[1/5] 安装基础依赖"
+        MSG[LOG_SYS_INIT_PROFILE]="[2/5] 写入全局 profile"
+        MSG[LOG_SYS_INIT_SHARE]="[3/5] 准备共享目录"
+        MSG[LOG_SYS_INIT_CACHE]="[4/5] 准备缓存"
+        MSG[LOG_SYS_INIT_PERM]="[5/5] 修正缓存权限"
+        MSG[LOG_SYS_INIT_DONE]="系统初始化完成"
+        MSG[LOG_SYS_UPDATE]="更新缓存"
+        MSG[LOG_SYS_CACHE_REFRESHED]="系统缓存已刷新"
+
+        MSG[INFO_PROFILE_PRESENT]="配置存在: %s"
+        MSG[WARN_PROFILE_MISSING]="配置缺失: %s"
+        MSG[INFO_BREW_CACHE_READY]="Homebrew 缓存就绪"
+        MSG[WARN_BREW_CACHE_MISSING]="Homebrew 缓存缺失"
+        MSG[INFO_DOCKER_ARCHIVE_READY]="Docker 压缩包就绪"
+        MSG[WARN_DOCKER_ARCHIVE_MISSING]="Docker 压缩包缺失"
+        MSG[INFO_SHARE_DIR_PRESENT]="共享目录存在 (%s)"
+        MSG[WARN_SHARE_DIR_MISSING]="共享目录缺失"
+        MSG[INFO_SYS_CHECK_PASS]="系统检查通过"
+        MSG[WARN_SYS_CHECK_ISSUES]="系统检查发现问题"
+        MSG[WARN_SYS_REMOVE]="将删除缓存与全局配置，但不会卸载系统包"
+        MSG[INFO_SYS_ARTIFACTS_REMOVED]="系统产物已删除"
+
+        MSG[LOG_CLONE_BREW]="正在克隆 Homebrew 缓存..."
+        MSG[LOG_UPDATE_BREW_CACHE]="正在更新 Homebrew 缓存..."
+        MSG[LOG_DOWNLOAD_DOCKER]="正在下载 Docker %s ..."
+        MSG[LOG_DOWNLOAD_DOCKER_EXTRAS]="正在下载 Docker rootless 扩展 %s ..."
+        MSG[INFO_DOCKER_ARCHIVE_PRESENT]="Docker 压缩包已存在: %s"
+        MSG[INFO_DOCKER_EXTRAS_PRESENT]="Docker 扩展包已存在: %s"
+
+        MSG[INFO_CREATING_USER]="正在创建用户 %s"
+        MSG[WARN_USER_REQUIRED]="以 Root 运行时必须指定 --user"
+        MSG[WARN_USER_FOR_DOCKER]="以 Root 运行 Docker 快捷命令必须指定 --user"
+
+        MSG[INFO_BREW_PRESENT]="Homebrew 已存在"
+        MSG[INFO_BREW_CONFIGURED]="Homebrew 配置完成"
+        MSG[WARN_BREW_NOT_INSTALLED]="未检测到 Homebrew，自动安装"
+        MSG[WARN_BREW_REMOVE_PROMPT]="卸载 Homebrew 会删除通过 brew 安装的所有软件。请输入 '我已经知晓卸载后会删除本地我自己安装的所有软件' 以继续: "
+        MSG[BREW_REMOVE_EXPECT]="我已经知晓卸载后会删除本地我自己安装的所有软件"
+        MSG[WARN_BREW_REMOVE_ABORT]="取消卸载 Homebrew"
+        MSG[INFO_BREW_REMOVED]="Homebrew 已移除"
+        MSG[LOG_BREW_UPDATE]="正在从缓存更新 Homebrew"
+        MSG[LOG_BREW_UPDATE_DONE]="Homebrew 更新完成"
+        MSG[WARN_BREW_MISSING]="未安装 Homebrew"
+
+        MSG[INFO_DOCKER_CONFIGURED]="Docker rootless 配置完成"
+        MSG[INFO_DOCKER_REFRESHED]="Docker 二进制已刷新"
+        MSG[INFO_DOCKER_REMOVED]="Docker 已移除"
+        MSG[WARN_DOCKER_INACTIVE]="Docker 服务未运行"
+        MSG[INFO_DOCKER_ACTIVE]="Docker 服务运行中"
+        MSG[INFO_DOCKER_DAEMON_OK]="Docker 守护进程可用"
+        MSG[WARN_DOCKER_DAEMON_FAIL]="无法连接 Docker 守护进程"
+        MSG[WARN_DOCKER_SETUPTOOL_MISSING]="未找到 dockerd-rootless-setuptool.sh，Docker rootless 安装失败"
+
+        MSG[WARN_SYSTEMD_USER_TIMEOUT]="Systemd 用户服务启动超时 (%ss) - 可能会导致 Docker 连接失败"
+        MSG[INFO_BREW_VERSION]="brew: %s"
+        MSG[INFO_APT_INTERCEPTED]="apt: [已拦截] （系统保护已启用）"
+        MSG[WARN_APT_NOT_INTERCEPTED]="apt: [未拦截] （警告：apt 未被拦截）"
+        MSG[INFO_SHARE_WRITE_OK]="共享目录写权限正常"
+        MSG[WARN_SHARE_WRITE_FAIL]="共享目录不可写"
+
+        MSG[WARN_SHARE_NOT_READY]="共享目录未准备，请联系管理员"
+        MSG[INFO_SHARE_LINKED]="共享工作区已链接"
+        MSG[INFO_SHARE_REMOVED]="共享工作区链接已移除"
+        MSG[WARN_SHARE_MISSING]="共享工作区缺失"
+        MSG[INFO_SHARE_AVAILABLE]="共享工作区可用"
+        MSG[INFO_INSTALLED_PATH]="已安装到 %s"
+        MSG[INFO_UNINSTALLED]="已卸载 %s"
+
+        MSG[LIST_SYS_TITLE]="[系统资源清单]"
+        MSG[LIST_USER_TITLE]="[用户资产清单: %s]"
+        MSG[LIST_ITEM_GLOBAL_PROFILE]="全局 Profile"
+        MSG[LIST_ITEM_CACHE_DIR]="缓存目录"
+        MSG[LIST_ITEM_BREW_REPO]="Homebrew 仓库"
+        MSG[LIST_ITEM_DOCKER_IMAGES]="Docker 缓存包"
+        MSG[LIST_ITEM_SHARE_DIR]="共享目录"
+        MSG[LIST_ITEM_LINGER]="Linger 状态"
+        MSG[LIST_ITEM_BREW]="Homebrew"
+        MSG[LIST_ITEM_DOCKER]="Docker"
+        MSG[LIST_ITEM_DOCKER_SERVICE]="Docker 服务"
+        MSG[LIST_ITEM_SHARE_LINK]="共享链接"
+        MSG[LIST_ITEM_APT_GUARD]="APT 拦截"
+
+        MSG[STATUS_INSTALLED]="已安装"
+        MSG[STATUS_MISSING]="未安装/不存在"
+        MSG[STATUS_ENABLED]="已启用"
+        MSG[STATUS_DISABLED]="未启用"
+        MSG[STATUS_ACTIVE]="运行中"
+        MSG[STATUS_INACTIVE]="停止"
+        MSG[STATUS_UNKNOWN]="未知"
+        MSG[STATUS_LINKED]="已链接 -> %s"
+        MSG[STATUS_UNLINKED]="未链接"
+    else
+        MSG[ERR_ROOT_REQUIRED]="Root privileges required!"
+        MSG[ERR_MISSING_CMD]="Command not found: %s"
+        MSG[ERR_UNKNOWN_OPTION]="Unknown option: %s"
+        MSG[ERR_UNKNOWN_MODULE]="Unknown module: %s"
+        MSG[ERR_UNKNOWN_MODULE_ACTION]="Unknown module action: %s"
+        MSG[ERR_MISSING_PARAM]="Missing parameter: %s"
+        MSG[ERR_CACHE_DOCKER_MISSING]="Docker cache missing, run: sudo %s sys init"
+        MSG[ERR_CACHE_BREW_MISSING]="Homebrew cache missing, run: sudo %s sys init"
+
+        MSG[LOG_SYS_INIT_DEPENDS]="[1/5] Installing base dependencies"
+        MSG[LOG_SYS_INIT_PROFILE]="[2/5] Writing global profile"
+        MSG[LOG_SYS_INIT_SHARE]="[3/5] Preparing shared workspace"
+        MSG[LOG_SYS_INIT_CACHE]="[4/5] Preparing caches"
+        MSG[LOG_SYS_INIT_PERM]="[5/5] Fixing cache permissions"
+        MSG[LOG_SYS_INIT_DONE]="System init complete"
+        MSG[LOG_SYS_UPDATE]="Updating caches"
+        MSG[LOG_SYS_CACHE_REFRESHED]="System caches refreshed"
+
+        MSG[INFO_PROFILE_PRESENT]="Profile present: %s"
+        MSG[WARN_PROFILE_MISSING]="Profile missing: %s"
+        MSG[INFO_BREW_CACHE_READY]="Homebrew cache ready"
+        MSG[WARN_BREW_CACHE_MISSING]="Homebrew cache missing"
+        MSG[INFO_DOCKER_ARCHIVE_READY]="Docker archive ready"
+        MSG[WARN_DOCKER_ARCHIVE_MISSING]="Docker archive missing"
+        MSG[INFO_SHARE_DIR_PRESENT]="Share dir present (%s)"
+        MSG[WARN_SHARE_DIR_MISSING]="Share dir missing"
+        MSG[INFO_SYS_CHECK_PASS]="System check passed"
+        MSG[WARN_SYS_CHECK_ISSUES]="System check found issues"
+        MSG[WARN_SYS_REMOVE]="This will remove caches and global profile but will not uninstall packages"
+        MSG[INFO_SYS_ARTIFACTS_REMOVED]="System artifacts removed"
+
+        MSG[LOG_CLONE_BREW]="Cloning Homebrew cache..."
+        MSG[LOG_UPDATE_BREW_CACHE]="Updating Homebrew cache..."
+        MSG[LOG_DOWNLOAD_DOCKER]="Downloading Docker %s..."
+        MSG[LOG_DOWNLOAD_DOCKER_EXTRAS]="Downloading Docker rootless extras %s..."
+        MSG[INFO_DOCKER_ARCHIVE_PRESENT]="Docker archive present: %s"
+        MSG[INFO_DOCKER_EXTRAS_PRESENT]="Docker extras archive present: %s"
+
+        MSG[INFO_CREATING_USER]="Creating user %s"
+        MSG[WARN_USER_REQUIRED]="--user is required when running as root"
+        MSG[WARN_USER_FOR_DOCKER]="--user is required for docker shortcuts as root"
+
+        MSG[INFO_BREW_PRESENT]="Homebrew already present"
+        MSG[INFO_BREW_CONFIGURED]="Homebrew configured"
+        MSG[WARN_BREW_NOT_INSTALLED]="Brew not installed; installing"
+        MSG[WARN_BREW_REMOVE_PROMPT]="About to delete Homebrew and all data. Type 'CONFIRM' to proceed: "
+        MSG[BREW_REMOVE_EXPECT]="CONFIRM"
+        MSG[WARN_BREW_REMOVE_ABORT]="Brew removal aborted"
+        MSG[INFO_BREW_REMOVED]="Homebrew removed"
+        MSG[LOG_BREW_UPDATE]="Updating brew from cache"
+        MSG[LOG_BREW_UPDATE_DONE]="Brew update finished"
+        MSG[WARN_BREW_MISSING]="Brew missing"
+
+        MSG[INFO_DOCKER_CONFIGURED]="Docker rootless configured"
+        MSG[INFO_DOCKER_REFRESHED]="Docker binaries refreshed"
+        MSG[INFO_DOCKER_REMOVED]="Docker removed"
+        MSG[WARN_DOCKER_INACTIVE]="Docker service inactive"
+        MSG[INFO_DOCKER_ACTIVE]="Docker service active"
+        MSG[INFO_DOCKER_DAEMON_OK]="Docker daemon is reachable"
+        MSG[WARN_DOCKER_DAEMON_FAIL]="Cannot connect to Docker daemon"
+        MSG[WARN_DOCKER_SETUPTOOL_MISSING]="dockerd-rootless-setuptool.sh not found; rootless install failed"
+
+        MSG[WARN_SYSTEMD_USER_TIMEOUT]="Systemd user service startup timeout (%ss) - Docker connection may fail"
+        MSG[INFO_BREW_VERSION]="brew: %s"
+        MSG[INFO_APT_INTERCEPTED]="apt: [intercepted] (System protection active)"
+        MSG[WARN_APT_NOT_INTERCEPTED]="apt: [not intercepted] (Warning: apt is not intercepted)"
+        MSG[INFO_SHARE_WRITE_OK]="Share directory is writable"
+        MSG[WARN_SHARE_WRITE_FAIL]="Share directory is not writable"
+
+        MSG[WARN_SHARE_NOT_READY]="Share dir not ready; ask admin"
+        MSG[INFO_SHARE_LINKED]="Share workspace linked"
+        MSG[INFO_SHARE_REMOVED]="Share workspace link removed"
+        MSG[WARN_SHARE_MISSING]="Share workspace missing"
+        MSG[INFO_SHARE_AVAILABLE]="Share workspace available"
+        MSG[INFO_INSTALLED_PATH]="Installed to %s"
+        MSG[INFO_UNINSTALLED]="Uninstalled %s"
+
+        MSG[LIST_SYS_TITLE]="[System Resource List]"
+        MSG[LIST_USER_TITLE]="[User Assets: %s]"
+        MSG[LIST_ITEM_GLOBAL_PROFILE]="Global Profile"
+        MSG[LIST_ITEM_CACHE_DIR]="Cache Directory"
+        MSG[LIST_ITEM_BREW_REPO]="Homebrew Repo"
+        MSG[LIST_ITEM_DOCKER_IMAGES]="Docker Cached Images"
+        MSG[LIST_ITEM_SHARE_DIR]="Share Directory"
+        MSG[LIST_ITEM_LINGER]="Linger State"
+        MSG[LIST_ITEM_BREW]="Homebrew"
+        MSG[LIST_ITEM_DOCKER]="Docker"
+        MSG[LIST_ITEM_DOCKER_SERVICE]="Docker Service"
+        MSG[LIST_ITEM_SHARE_LINK]="Share Link"
+        MSG[LIST_ITEM_APT_GUARD]="APT Intercept"
+
+        MSG[STATUS_INSTALLED]="Installed"
+        MSG[STATUS_MISSING]="Missing/Not Found"
+        MSG[STATUS_ENABLED]="Enabled"
+        MSG[STATUS_DISABLED]="Disabled"
+        MSG[STATUS_ACTIVE]="Active"
+        MSG[STATUS_INACTIVE]="Inactive"
+        MSG[STATUS_UNKNOWN]="Unknown"
+        MSG[STATUS_LINKED]="Linked -> %s"
+        MSG[STATUS_UNLINKED]="Unlinked"
+    fi
+}
+
+translate() {
+    local key=$1; shift || true
+    local template="${MSG[$key]:-[$key] %s}"
+    local out
+    printf -v out "$template" "$@"
+    printf "%s" "$out"
+}
+
+t() {
+    translate "$@"
+    printf "\n"
+}
+
+detect_language
+load_messages
+
+SCRIPT_NAME="multiuser"
+VERSION="0.2.3"
+AUTHOR="LingNc"
+REPOSITORY="https://github.com/LingNc/lingnc-cli-utils"
+
+CACHE_DIR="/opt/dev-cache"
+SHARE_DIR="/home/share"
+SHARE_GROUP="devteam"
+GLOBAL_PROFILE="/etc/profile.d/99-multiuser-env.sh"
+BREW_CACHE_REPO="${CACHE_DIR}/homebrew.git"
+DOCKER_VERSION="29.1.4"
+DOCKER_EXTRAS_VERSION="29.1.4"
+
+SCRIPT_PATH="$(readlink -f "$0")"
+
+# ---------- basic helpers ----------
+info() { printf "[INFO] %s\n" "$(translate "$@")"; }
+warn() { printf "[WARN] %s\n" "$(translate "$@")" >&2; }
+error() { printf "[ERROR] %s\n" "$(translate "$@")" >&2; exit 1; }
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || error ERR_MISSING_CMD "$1"
+}
+
+require_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        error ERR_ROOT_REQUIRED
+    fi
+}
+
+# Unified parameter validator
+# Usage: validate_params "cmd" "${1:-}|name1" "${2:-}|name2" ...
+validate_params() {
+    local cmd_name="$1"
+    shift
+
+    while [ $# -gt 0 ]; do
+        local pair="$1"
+        shift
+        local value="${pair%%|*}"
+        local name="${pair#*|}"
+        if [ -z "$value" ]; then
+            error ERR_MISSING_PARAM "${name} (for ${cmd_name})"
+        fi
+    done
+}
+
+# Initialize DBus env for user-level systemd interactions
+init_user_dbus() {
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+
+    local timeout=0
+    while [ ! -S "${XDG_RUNTIME_DIR}/bus" ]; do
+        if [ "$timeout" -gt 10 ]; then
+            warn WARN_SYSTEMD_USER_TIMEOUT "10"
+            break
+        fi
+        sleep 1
+        timeout=$((timeout + 1))
+    done
+}
+
+ensure_config_block() {
+    local target_file="$1"
+    local block_id="$2"
+    local content="$3"
+    local start_mark="# === MULTIUSER_${block_id}_START ==="
+    local end_mark="# === MULTIUSER_${block_id}_END ==="
+    local full_block="${start_mark}
+${content}
+${end_mark}"
+
+    [ -f "$target_file" ] || touch "$target_file"
+
+    if grep -q "$start_mark" "$target_file"; then
+        sed -i "/$start_mark/,/$end_mark/d" "$target_file"
+    fi
+
+    printf "%s\n" "$full_block" >>"$target_file"
+}
+
+remove_config_block() {
+    local target_file="$1"
+    local block_id="$2"
+    local start_mark="# === MULTIUSER_${block_id}_START ==="
+    local end_mark="# === MULTIUSER_${block_id}_END ==="
+
+    [ -f "$target_file" ] || return 0
+    sed -i "/$start_mark/,/$end_mark/d" "$target_file"
+}
+
+run_as_user() {
+    local target_user="$1"
+    shift
+    sudo -u "$target_user" -i \
+        CACHE_DIR="$CACHE_DIR" \
+        SHARE_DIR="$SHARE_DIR" \
+        SHARE_GROUP="$SHARE_GROUP" \
+        GLOBAL_PROFILE="$GLOBAL_PROFILE" \
+        BREW_CACHE_REPO="$BREW_CACHE_REPO" \
+        DOCKER_VERSION="$DOCKER_VERSION" \
+        DOCKER_EXTRAS_VERSION="$DOCKER_EXTRAS_VERSION" \
+        SCRIPT_NAME="$SCRIPT_NAME" \
+        MULTIUSER_LANG="$CURRENT_LANG" \
+        "$SCRIPT_PATH" "$@"
+}
+
+# ---------- system-level setup ----------
+ensure_global_profile() {
+    cat >"$GLOBAL_PROFILE" <<'EOF'
+# 拦截 apt 和 apt-get
+if [ "$(id -u)" -ne 0 ]; then
+    apt() {
+        echo -e "\033[31m[Permission Denied]\033[0m 你没有系统级软件管理权限."
+        echo -e "   请使用 \033[32mbrew install <package>\033[0m 安装软件给自己使用。"
+        echo -e "   或者联系管理员安装系统级依赖。"
+    }
+    apt-get() {
+        apt "$@"
+    }
+
+    # 自动加载用户的 Homebrew (如果已安装)
+    if [ -d "$HOME/.linuxbrew/bin" ]; then
+        eval "$($HOME/.linuxbrew/bin/brew shellenv)"
+    elif [ -d "/home/linuxbrew/.linuxbrew/bin" ]; then
+        eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+    fi
+
+    # 自动设置 Docker Rootless Host
+    if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/docker.sock" ]; then
+        export DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/docker.sock"
+    fi
+fi
+EOF
+}
+
+ensure_share_dir() {
+    if ! getent group "$SHARE_GROUP" >/dev/null; then
+        groupadd "$SHARE_GROUP"
+    fi
+
+    mkdir -p "$SHARE_DIR"
+    chown root:"$SHARE_GROUP" "$SHARE_DIR"
+    chmod 2770 "$SHARE_DIR"
+}
+
+ensure_cache_dir() {
+    mkdir -p "$CACHE_DIR"
+    chmod 755 "$CACHE_DIR"
+}
+
+update_homebrew_cache() {
+    ensure_cache_dir
+    if [ ! -d "$BREW_CACHE_REPO" ]; then
+        info LOG_CLONE_BREW
+        git clone --bare --depth=1 https://github.com/Homebrew/brew.git "$BREW_CACHE_REPO"
+    else
+        info LOG_UPDATE_BREW_CACHE
+        git --git-dir="$BREW_CACHE_REPO" fetch origin master:master
+    fi
+
+    if ! git config --system --get-all safe.directory | grep -q "$BREW_CACHE_REPO"; then
+        git config --system --add safe.directory "$BREW_CACHE_REPO"
+    fi
+}
+
+download_docker_archives() {
+    ensure_cache_dir
+    local main_pkg="docker-${DOCKER_VERSION}.tgz"
+    local extras_pkg="docker-rootless-extras-${DOCKER_EXTRAS_VERSION}.tgz"
+
+    find "$CACHE_DIR" -maxdepth 1 -type f -name 'docker-*.tgz' ! -name 'docker-rootless-extras-*.tgz' ! -name "$main_pkg" -delete || true
+    find "$CACHE_DIR" -maxdepth 1 -type f -name 'docker-rootless-extras-*.tgz' ! -name "$extras_pkg" -delete || true
+
+    if [ ! -f "$CACHE_DIR/$main_pkg" ]; then
+        info LOG_DOWNLOAD_DOCKER "$DOCKER_VERSION"
+        curl -L -o "$CACHE_DIR/$main_pkg" "https://download.docker.com/linux/static/stable/x86_64/${main_pkg}"
+    else
+        info INFO_DOCKER_ARCHIVE_PRESENT "$main_pkg"
+    fi
+
+    if [ ! -f "$CACHE_DIR/$extras_pkg" ]; then
+        info LOG_DOWNLOAD_DOCKER_EXTRAS "$DOCKER_EXTRAS_VERSION"
+        curl -L -o "$CACHE_DIR/$extras_pkg" "https://download.docker.com/linux/static/stable/x86_64/${extras_pkg}"
+    else
+        info INFO_DOCKER_EXTRAS_PRESENT "$extras_pkg"
+    fi
+}
+
+sys_init() {
+    require_root
+    info LOG_SYS_INIT_DEPENDS
+    apt-get update
+    apt-get install -y build-essential curl file git uidmap dbus-user-session fuse-overlayfs iptables slirp4netns
+
+    info LOG_SYS_INIT_PROFILE
+    ensure_global_profile
+
+    info LOG_SYS_INIT_SHARE
+    ensure_share_dir
+
+    info LOG_SYS_INIT_CACHE
+    update_homebrew_cache
+    download_docker_archives
+
+    info LOG_SYS_INIT_PERM
+    chmod -R 755 "$CACHE_DIR"
+    info LOG_SYS_INIT_DONE
+}
+
+sys_update() {
+    require_root
+    info LOG_SYS_UPDATE
+    ensure_global_profile
+    ensure_share_dir
+    update_homebrew_cache
+    download_docker_archives
+    chmod -R 755 "$CACHE_DIR"
+    info LOG_SYS_CACHE_REFRESHED
+}
+
+sys_check() {
+    require_root
+    local ok=0
+    if [ -f "$GLOBAL_PROFILE" ]; then
+        info INFO_PROFILE_PRESENT "$GLOBAL_PROFILE"
+    else
+        warn WARN_PROFILE_MISSING "$GLOBAL_PROFILE"
+        ok=1
+    fi
+
+    if [ -d "$BREW_CACHE_REPO" ]; then
+        info INFO_BREW_CACHE_READY
+    else
+        warn WARN_BREW_CACHE_MISSING
+        ok=1
+    fi
+
+    if ls "$CACHE_DIR"/docker-*.tgz >/dev/null 2>&1; then
+        info INFO_DOCKER_ARCHIVE_READY
+    else
+        warn WARN_DOCKER_ARCHIVE_MISSING
+        ok=1
+    fi
+
+    if [ -d "$SHARE_DIR" ]; then
+        info INFO_SHARE_DIR_PRESENT "$SHARE_DIR"
+    else
+        warn WARN_SHARE_DIR_MISSING
+        ok=1
+    fi
+
+    if [ "$ok" -eq 0 ]; then
+        info INFO_SYS_CHECK_PASS
+    else
+        warn WARN_SYS_CHECK_ISSUES
+        exit 1
+    fi
+}
+
+sys_list() {
+    require_root
+    printf "%s\n" "$(translate LIST_SYS_TITLE)"
+
+    local profile_status
+    if [ -f "$GLOBAL_PROFILE" ]; then
+        profile_status="$(translate STATUS_INSTALLED) ($GLOBAL_PROFILE)"
+    else
+        profile_status="$(translate STATUS_MISSING)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_GLOBAL_PROFILE)"
+    printf "  %s\n" "$profile_status"
+
+    local cache_status
+    if [ -d "$CACHE_DIR" ]; then
+        cache_status="$(translate STATUS_INSTALLED) ($CACHE_DIR)"
+    else
+        cache_status="$(translate STATUS_MISSING)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_CACHE_DIR)"
+    printf "  %s\n" "$cache_status"
+
+    local brew_status
+    if [ -d "$BREW_CACHE_REPO" ]; then
+        brew_status="$(translate STATUS_INSTALLED)"
+        if git --git-dir="$BREW_CACHE_REPO" rev-parse --is-bare-repository >/dev/null 2>&1; then
+            local last_commit
+            last_commit=$(git --git-dir="$BREW_CACHE_REPO" log -1 --format=%cd --date=short 2>/dev/null || echo "N/A")
+            brew_status="$brew_status (Updated: $last_commit)"
+        fi
+    else
+        brew_status="$(translate STATUS_MISSING)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_BREW_REPO)"
+    printf "  %s\n" "$brew_status"
+
+    printf "%s:\n" "$(translate LIST_ITEM_DOCKER_IMAGES)"
+    if [ -d "$CACHE_DIR" ]; then
+        local found_docker=false
+        for f in "$CACHE_DIR"/docker-*.tgz; do
+            [ -e "$f" ] || continue
+            printf "  %s\n" "$(basename "$f")"
+            found_docker=true
+        done
+        $found_docker || printf "      (None)\n"
+    else
+        printf "      (Cache dir missing)\n"
+    fi
+
+    local share_status
+    if [ -d "$SHARE_DIR" ]; then
+        share_status="$(translate STATUS_INSTALLED) ($SHARE_DIR)"
+    else
+        share_status="$(translate STATUS_MISSING)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_SHARE_DIR)"
+    printf "  %s\n" "$share_status"
+}
+
+sys_remove() {
+    require_root
+    warn WARN_SYS_REMOVE
+    rm -rf "$BREW_CACHE_REPO" "$CACHE_DIR"/docker-*.tgz "$CACHE_DIR"/docker-rootless-extras-*.tgz
+    rm -f "$GLOBAL_PROFILE"
+    info INFO_SYS_ARTIFACTS_REMOVED
+}
+
+# ---------- user helpers (root side) ----------
+ensure_user_exists() {
+    local user="$1"
+    if ! id "$user" >/dev/null 2>&1; then
+        info INFO_CREATING_USER "$user"
+        useradd -m -s /bin/bash "$user"
+        passwd "$user"
+    fi
+}
+
+enable_user_linger() {
+    local user="$1"
+    loginctl enable-linger "$user" >/dev/null 2>&1 || true
+    sleep 1
+}
+
+disable_user_linger() {
+    local user="$1"
+    loginctl disable-linger "$user" >/dev/null 2>&1 || true
+}
+
+ensure_user_subids() {
+    local user="$1"
+    if ! grep -q "^${user}:" /etc/subuid; then
+        echo "$user:100000:65536" >>/etc/subuid
+    fi
+    if ! grep -q "^${user}:" /etc/subgid; then
+        echo "$user:100000:65536" >>/etc/subgid
+    fi
+}
+
+ensure_user_share_link() {
+    local user="$1"
+    local user_home="$(eval echo "~$user")"
+    if ! id -nG "$user" | grep -qw "$SHARE_GROUP"; then
+        usermod -aG "$SHARE_GROUP" "$user"
+    fi
+    if [ ! -e "$user_home/share-workspace" ]; then
+        ln -s "$SHARE_DIR" "$user_home/share-workspace"
+        chown -h "$user:$user" "$user_home/share-workspace"
+    fi
+}
+
+prepare_target_user() {
+    local user="$1"
+    local module="$2"
+    ensure_user_exists "$user"
+    enable_user_linger "$user"
+
+    case "$module" in
+        all|docker)
+            ensure_user_subids "$user"
+            ;;&
+        all|share)
+            ensure_share_dir
+            ensure_user_share_link "$user"
+            ;;
+        all|brew)
+            :
+            ;;
+    esac
+}
+
+# ---------- module operations (run as target user) ----------
+require_cache_for_module() {
+    case "$1" in
+        docker)
+            [ -f "$CACHE_DIR/docker-${DOCKER_VERSION}.tgz" ] || error ERR_CACHE_DOCKER_MISSING "$SCRIPT_NAME"
+            [ -f "$CACHE_DIR/docker-rootless-extras-${DOCKER_EXTRAS_VERSION}.tgz" ] || error ERR_CACHE_DOCKER_MISSING "$SCRIPT_NAME"
+            ;;
+        brew)
+            [ -d "$BREW_CACHE_REPO" ] || error ERR_CACHE_BREW_MISSING "$SCRIPT_NAME"
+            ;;
+        share)
+            [ -d "$SHARE_DIR" ] || warn WARN_SHARE_NOT_READY
+            ;;
+    esac
+}
+
+module_install_brew() {
+    require_cache_for_module brew
+    local brew_dir="$HOME/.linuxbrew"
+
+    if [ ! -d "$brew_dir" ]; then
+        info LOG_CLONE_BREW
+        git clone "$BREW_CACHE_REPO" "$brew_dir"
+        git -C "$brew_dir" remote set-url origin https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git || true
+    else
+        info INFO_BREW_PRESENT
+    fi
+
+    if [ -x "$brew_dir/bin/brew" ]; then
+        eval "$($brew_dir/bin/brew shellenv)"
+    fi
+
+    local block_content
+    block_content=$(cat <<'EOF'
+# Homebrew Mirror Settings
+export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git"
+export HOMEBREW_CORE_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/homebrew-core.git"
+export HOMEBREW_API_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/api"
+export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles"
+export HOMEBREW_PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+
+# Load Homebrew ShellEnv
+if [ -x "$HOME/.linuxbrew/bin/brew" ]; then
+    eval "$("$HOME/.linuxbrew/bin/brew" shellenv)"
+fi
+
+# 关键：加载全局配置 (APT 拦截等) - 对应 legacy user_onboard.sh
+if [ -f "/etc/profile.d/99-multiuser-env.sh" ]; then
+    . "/etc/profile.d/99-multiuser-env.sh"
+fi
+EOF
+    )
+    ensure_config_block "$HOME/.bashrc" "${USER}_BREW" "$block_content"
+    info INFO_BREW_CONFIGURED
+}
+
+module_remove_brew() {
+    local prompt
+    local expected
+    local input
+    prompt="$(translate WARN_BREW_REMOVE_PROMPT)"
+    expected="$(translate BREW_REMOVE_EXPECT)"
+    read -r -p "$prompt" input
+    if [ "$input" != "$expected" ]; then
+        warn WARN_BREW_REMOVE_ABORT
+        return 1
+    fi
+
+    rm -rf "$HOME/.linuxbrew"
+    remove_config_block "$HOME/.bashrc" "${USER}_BREW"
+    info INFO_BREW_REMOVED
+}
+
+module_update_brew() {
+    require_cache_for_module brew
+    local brew_dir="$HOME/.linuxbrew"
+    if [ ! -d "$brew_dir" ]; then
+        warn WARN_BREW_NOT_INSTALLED
+        module_install_brew
+        return
+    fi
+    info LOG_BREW_UPDATE
+    git -C "$brew_dir" fetch origin
+    git -C "$brew_dir" reset --hard origin/master || true
+    eval "$($brew_dir/bin/brew shellenv)"
+    brew update --force --quiet || true
+    module_install_brew
+    info LOG_BREW_UPDATE_DONE
+}
+
+module_check_brew() {
+    local brew_version
+    brew_version=$(bash -i -c 'source ~/.bashrc; brew --version 2>/dev/null | head -n 1' 2>/dev/null)
+    if [[ "$brew_version" == *"Homebrew"* ]]; then
+        info INFO_BREW_VERSION "$brew_version"
+    else
+        warn WARN_BREW_MISSING
+        return 1
+    fi
+}
+
+module_install_docker() {
+    require_cache_for_module docker
+    init_user_dbus
+    mkdir -p "$HOME/bin"
+    export PATH="$HOME/bin:$PATH"
+    tar -xzf "$CACHE_DIR/docker-${DOCKER_VERSION}.tgz" -C "$HOME/bin" --strip-components=1
+    tar -xzf "$CACHE_DIR/docker-rootless-extras-${DOCKER_EXTRAS_VERSION}.tgz" -C "$HOME/bin" --strip-components=1
+
+    if command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
+        dockerd-rootless-setuptool.sh install --skip-iptables >/dev/null 2>&1 || true
+    else
+        warn WARN_DOCKER_SETUPTOOL_MISSING
+        return 1
+    fi
+
+    local block_content
+    block_content=$(cat <<'EOF'
+export PATH="$HOME/bin:$PATH"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/docker.sock"
+EOF
+    )
+    ensure_config_block "$HOME/.bashrc" "${USER}_DOCKER" "$block_content"
+
+    systemctl --user enable docker >/dev/null 2>&1 || true
+    systemctl --user start docker >/dev/null 2>&1 || true
+    info INFO_DOCKER_CONFIGURED
+}
+
+module_update_docker() {
+    require_cache_for_module docker
+    init_user_dbus
+    systemctl --user stop docker >/dev/null 2>&1 || true
+    module_install_docker || return 1
+    info INFO_DOCKER_REFRESHED
+}
+
+module_remove_docker() {
+    init_user_dbus
+    systemctl --user stop docker >/dev/null 2>&1 || true
+    systemctl --user disable docker >/dev/null 2>&1 || true
+    remove_config_block "$HOME/.bashrc" "${USER}_DOCKER"
+    rm -f "$HOME/bin/docker" "$HOME/bin/dockerd" "$HOME/bin/docker-init" \
+        "$HOME/bin/docker-proxy" "$HOME/bin/docker-compose" "$HOME/bin/containerd" \
+        "$HOME/bin/containerd-shim" "$HOME/bin/containerd-shim-runc-v2" \
+        "$HOME/bin/ctr" "$HOME/bin/runc" "$HOME/bin/dockerd-rootless-setuptool.sh" \
+        "$HOME/bin/dockerd-rootless.sh" "$HOME/bin/rootlesskit" \
+        "$HOME/bin/rootlesskit-docker-proxy" "$HOME/bin/vpnkit"
+    info INFO_DOCKER_REMOVED
+}
+
+module_check_docker() {
+    init_user_dbus
+    if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -z "${DOCKER_HOST:-}" ]; then
+        export DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/docker.sock"
+    fi
+    if docker info >/dev/null 2>&1; then
+        info INFO_DOCKER_DAEMON_OK
+        return 0
+    fi
+
+    warn WARN_DOCKER_DAEMON_FAIL
+    systemctl --user status docker --no-pager 2>/dev/null | head -n 3 || true
+    return 1
+}
+
+module_install_share() {
+    if [ ! -d "$SHARE_DIR" ]; then
+        warn WARN_SHARE_NOT_READY
+        return 1
+    fi
+    if [ ! -e "$HOME/share-workspace" ]; then
+        ln -s "$SHARE_DIR" "$HOME/share-workspace"
+    fi
+    info INFO_SHARE_LINKED
+}
+
+module_remove_share() {
+    [ -L "$HOME/share-workspace" ] && rm "$HOME/share-workspace"
+    info INFO_SHARE_REMOVED
+}
+
+module_check_share() {
+    if [ -d "$HOME/share-workspace" ] || [ -L "$HOME/share-workspace" ]; then
+        info INFO_SHARE_AVAILABLE
+        if touch "$HOME/share-workspace/.perm_check" 2>/dev/null; then
+            rm -f "$HOME/share-workspace/.perm_check" || true
+            info INFO_SHARE_WRITE_OK
+        else
+            warn WARN_SHARE_WRITE_FAIL
+            return 1
+        fi
+    else
+        warn WARN_SHARE_MISSING
+        return 1
+    fi
+}
+
+module_check_apt() {
+    local apt_type
+    apt_type=$(bash -i -c 'source ~/.bashrc; type -t apt' 2>/dev/null)
+    if [ "$apt_type" = "function" ]; then
+        info INFO_APT_INTERCEPTED
+    else
+        warn WARN_APT_NOT_INTERCEPTED
+        local apt_desc
+        apt_desc=$(bash -i -c 'source ~/.bashrc; type apt' 2>/dev/null)
+        printf "      诊断信息: %s\n" "$apt_desc"
+        printf "      建议: 检查 user_onboard.sh 是否正确将拦截函数写入了 ~/.bashrc\n"
+        return 1
+    fi
+}
+
+module_install() {
+    local module="$1"
+    case "$module" in
+        all)
+            module_install_brew
+            module_install_docker
+            module_install_share
+            ;;
+        brew) module_install_brew ;;
+        docker) module_install_docker ;;
+        share) module_install_share ;;
+        *) error ERR_UNKNOWN_MODULE "$module" ;;
+    esac
+}
+
+module_update() {
+    local module="$1"
+    case "$module" in
+        all)
+            module_update_brew
+            module_update_docker
+            module_install_share
+            ;;
+        brew) module_update_brew ;;
+        docker) module_update_docker ;;
+        share) module_install_share ;;
+        *) error ERR_UNKNOWN_MODULE "$module" ;;
+    esac
+}
+
+module_remove() {
+    local module="$1"
+    case "$module" in
+        all)
+            module_remove_docker
+            module_remove_brew
+            module_remove_share
+            ;;
+        brew) module_remove_brew ;;
+        docker) module_remove_docker ;;
+        share) module_remove_share ;;
+        *) error ERR_UNKNOWN_MODULE "$module" ;;
+    esac
+}
+module_check() {
+    local module="$1"
+    local rc=0
+    case "$module" in
+        all)
+            module_check_brew || rc=1
+            module_check_docker || rc=1
+            module_check_share || rc=1
+            module_check_apt || rc=1
+            ;;
+        brew) module_check_brew || rc=1 ;;
+        docker) module_check_docker || rc=1 ;;
+        share) module_check_share || rc=1 ;;
+        *) error ERR_UNKNOWN_MODULE "$module" ;;
+    esac
+    return "$rc"
+}
+
+module_list() {
+    printf "%s\n" "$(translate LIST_USER_TITLE "$USER")"
+
+    local linger_status
+    if loginctl show-user "$USER" --property=Linger 2>/dev/null | grep -q "yes"; then
+        linger_status="$(translate STATUS_ENABLED)"
+    elif loginctl show-user "$USER" --property=Linger >/dev/null 2>&1; then
+        linger_status="$(translate STATUS_DISABLED)"
+    else
+        linger_status="$(translate STATUS_UNKNOWN)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_LINGER)"
+    printf "  %s\n" "$linger_status"
+
+    if [ -f "$HOME/.bashrc" ]; then
+        source "$HOME/.bashrc" || true
+    fi
+
+    local brew_ver
+    if command -v brew >/dev/null 2>&1; then
+        brew_ver=$(brew --version | head -n1 | awk '{print $2}')
+        printf "%s:\n" "$(translate LIST_ITEM_BREW)"
+        printf "  %s (%s)\n" "$(translate STATUS_INSTALLED)" "v$brew_ver"
+    else
+        printf "%s:\n" "$(translate LIST_ITEM_BREW)"
+        printf "  %s\n" "$(translate STATUS_MISSING)"
+    fi
+
+    local docker_ver
+    if command -v docker >/dev/null 2>&1; then
+        docker_ver=$(docker --version | awk '{print $3}' | tr -d ',')
+        printf "%s:\n" "$(translate LIST_ITEM_DOCKER)"
+        printf "  %s (%s)\n" "$(translate STATUS_INSTALLED)" "v$docker_ver"
+    else
+        printf "%s:\n" "$(translate LIST_ITEM_DOCKER)"
+        printf "  %s\n" "$(translate STATUS_MISSING)"
+    fi
+
+    local link_status
+    if [ -L "$HOME/share-workspace" ]; then
+        local target
+        target=$(readlink "$HOME/share-workspace")
+        link_status="$(translate STATUS_LINKED "$target")"
+    else
+        link_status="$(translate STATUS_UNLINKED)"
+    fi
+    printf "%s:\n" "$(translate LIST_ITEM_SHARE_LINK)"
+    printf "  %s\n" "$link_status"
+}
+
+# ---------- docker shortcuts ----------
+docker_service_action() {
+    local action="$1"
+    init_user_dbus
+    case "$action" in
+        status)
+            systemctl --user status docker --no-pager
+            ;;
+        *)
+            systemctl --user "$action" docker
+            ;;
+    esac
+}
+
+# ---------- command routing ----------
+show_help() {
+        if [ "$CURRENT_LANG" = "cn" ]; then
+                cat <<EOF
+${SCRIPT_NAME} ${VERSION}
+作者: ${AUTHOR}
+仓库: ${REPOSITORY}
+用法: ${SCRIPT_NAME} <命令> [选项]
+
+全局:
+    help|--help|-h        显示帮助
+    version|--version|-v  显示版本
+    install               安装到 /usr/local/bin/${SCRIPT_NAME}
+    uninstall             卸载已安装的脚本
+
+系统级 (root):
+    sys init|update|check|remove|list
+
+用户初始化 (root):
+    create <user> [--with-docker] [--with-brew] [--link-share] [--all]
+    config <user> install|update|remove|check|list [all|docker|brew|share]
+
+用户模块:
+    module install|update|remove|check|list [all|docker|brew|share] [--user <name>]  # 以 root 运行时需指定 --user
+
+Docker 快捷:
+    start|stop|status|enable|disable docker [--user <name>]
+EOF
+        else
+                cat <<EOF
+${SCRIPT_NAME} ${VERSION}
+Author: ${AUTHOR}
+Repository: ${REPOSITORY}
+Usage: ${SCRIPT_NAME} <command> [options]
+
+Global:
+    help|--help|-h        Show help
+    version|--version|-v  Show version
+    install               Install this script to /usr/local/bin/${SCRIPT_NAME}
+    uninstall             Remove installed script
+
+System (root):
+    sys init|update|check|remove|list
+
+User provisioning (root):
+    create <user> [--with-docker] [--with-brew] [--link-share] [--all]
+    config <user> install|update|remove|check|list [all|docker|brew|share]
+
+User modules:
+    module install|update|remove|check|list [all|docker|brew|share] [--user <name>]  # --user only when run as root
+
+Docker shortcuts:
+    start|stop|status|enable|disable docker [--user <name>]
+EOF
+        fi
+}
+
+install_self() {
+    require_root
+    cp "$SCRIPT_PATH" "/usr/local/bin/${SCRIPT_NAME}"
+    chmod +x "/usr/local/bin/${SCRIPT_NAME}"
+    info INFO_INSTALLED_PATH "/usr/local/bin/${SCRIPT_NAME}"
+}
+
+uninstall_self() {
+    require_root
+    rm -f "/usr/local/bin/${SCRIPT_NAME}"
+    info INFO_UNINSTALLED "$SCRIPT_NAME"
+}
+
+handle_module_command() {
+    local action="${1:-}"
+    local module="${2:-}"
+    validate_params "module" "${action}|action"
+    if [ "$action" = "list" ]; then
+        shift 1 || true
+    else
+        validate_params "module" "${module}|module"
+        shift 2 || true
+    fi
+    local target_user="$USER"
+
+    while [ $# -gt 0 ]; do
+        case "${1:-}" in
+            --user)
+                target_user="${2:-}"
+                [ -n "$target_user" ] || error ERR_MISSING_PARAM "user name"
+                shift 2 || true
+                ;;
+            *) error ERR_UNKNOWN_OPTION "$1" ;;
+        esac
+    done
+
+    if [ "$(id -u)" -eq 0 ]; then
+        [ -n "$target_user" ] || error WARN_USER_REQUIRED
+        if [ "$action" = "list" ]; then
+            run_as_user "$target_user" module "$action"
+        else
+            prepare_target_user "$target_user" "$module"
+            run_as_user "$target_user" module "$action" "$module"
+        fi
+        if [ "$action" = "remove" ] && { [ "$module" = "all" ] || [ "$module" = "docker" ]; }; then
+            disable_user_linger "$target_user"
+        fi
+        return
+    fi
+
+    # running as target user
+    case "$action" in
+        install) module_install "$module" ;;
+        update)  module_update "$module" ;;
+        remove)  module_remove "$module" ;;
+        check)   module_check "$module" ;;
+        list)    module_list ;;
+        *)       error ERR_UNKNOWN_MODULE_ACTION "$action" ;;
+    esac
+}
+
+handle_config_command() {
+    require_root
+    local user="${1:-}"
+    local action="${2:-}"
+    local module="${3:-all}"
+    validate_params "config" "${user}|username" "${action}|action"
+
+    case "$action" in
+        install|update|remove|check|list) : ;;
+        *) error ERR_UNKNOWN_MODULE_ACTION "$action" ;;
+    esac
+    if [ "$action" = "list" ]; then
+        run_as_user "$user" module "$action"
+        return
+    fi
+    case "$module" in
+        all|docker|brew|share) : ;;
+        *) error ERR_UNKNOWN_MODULE "$module" ;;
+    esac
+
+    prepare_target_user "$user" "$module"
+    run_as_user "$user" module "$action" "$module"
+    if [ "$action" = "remove" ] && { [ "$module" = "all" ] || [ "$module" = "docker" ]; }; then
+        disable_user_linger "$user"
+    fi
+}
+
+handle_create_command() {
+    require_root
+    local user="${1:-}"
+    shift || true
+    validate_params "create" "${user}|user"
+
+    local with_docker=false
+    local with_brew=false
+    local with_share=false
+    local any=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --with-docker) with_docker=true; any=true; shift ;;
+            --with-brew)   with_brew=true;   any=true; shift ;;
+            --link-share)  with_share=true;  any=true; shift ;;
+            --all)         with_docker=true; with_brew=true; with_share=true; any=true; shift ;;
+            *) error ERR_UNKNOWN_OPTION "$1" ;;
+        esac
+    done
+
+    if [ "$any" = false ]; then
+        with_docker=true; with_brew=true; with_share=true
+    fi
+
+    ensure_user_exists "$user"
+    ensure_user_subids "$user"
+    enable_user_linger "$user"
+    ensure_share_dir
+    ensure_user_share_link "$user"
+
+    $with_docker && run_as_user "$user" module install docker
+    $with_brew && run_as_user "$user" module install brew
+    $with_share && run_as_user "$user" module install share
+}
+
+handle_docker_shortcut() {
+    local action="${1:-}"
+    [ -n "$action" ] || error ERR_MISSING_PARAM "action"
+    local target_user="$USER"
+    shift || true
+    while [ $# -gt 0 ]; do
+        case "${1:-}" in
+            --user)
+                target_user="${2:-}"
+                [ -n "$target_user" ] || error ERR_MISSING_PARAM "user name"
+                shift 2 || true
+                ;;
+            *) error ERR_UNKNOWN_OPTION "$1" ;;
+        esac
+    done
+
+    if [ "$(id -u)" -eq 0 ]; then
+        [ -n "$target_user" ] || error WARN_USER_FOR_DOCKER
+        prepare_target_user "$target_user" docker
+        run_as_user "$target_user" "$action" docker
+    else
+        docker_service_action "$action"
+    fi
+}
+
+main() {
+    local cmd="${1:-help}"
+    case "$cmd" in
+        help|--help|-h)
+            show_help
+            ;;
+        version|--version|-v)
+            printf "%s %s\n" "${SCRIPT_NAME}" "${VERSION}"
+            printf "Author: %s\n" "${AUTHOR}"
+            printf "Repository: %s\n" "${REPOSITORY}"
+            ;;
+        install)
+            install_self
+            ;;
+        uninstall)
+            uninstall_self
+            ;;
+        sys)
+            local sub=${2:-}
+            case "$sub" in
+                init) sys_init ;;
+                update) sys_update ;;
+                check) sys_check ;;
+                remove) sys_remove ;;
+                list) sys_list ;;
+                *) show_help ; exit 1 ;;
+            esac
+            ;;
+        create)
+            shift
+            handle_create_command "$@"
+            ;;
+        config)
+            shift
+            handle_config_command "$@"
+            ;;
+        module)
+            shift
+            handle_module_command "$@"
+            ;;
+        start|stop|status|enable|disable)
+            local action="$cmd"
+            shift
+            local target=${1:-}
+            if [ "$target" != "docker" ]; then
+                show_help; exit 1
+            fi
+            shift || true
+            handle_docker_shortcut "$action" "$@"
+            ;;
+        *)
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
