@@ -51,6 +51,8 @@ load_messages() {
 
         MSG[LOG_CLONE_BREW]="正在克隆 Homebrew 缓存..."
         MSG[LOG_UPDATE_BREW_CACHE]="正在更新 Homebrew 缓存..."
+        MSG[LOG_FETCH_LATEST_DOCKER]="正在获取最新 Docker 版本..."
+        MSG[INFO_LATEST_DOCKER_VERSION]="最新 Docker 版本: %s"
         MSG[LOG_DOWNLOAD_DOCKER]="正在下载 Docker %s ..."
         MSG[LOG_DOWNLOAD_DOCKER_EXTRAS]="正在下载 Docker rootless 扩展 %s ..."
         MSG[INFO_DOCKER_ARCHIVE_PRESENT]="Docker 压缩包已存在: %s"
@@ -152,6 +154,8 @@ load_messages() {
 
         MSG[LOG_CLONE_BREW]="Cloning Homebrew cache..."
         MSG[LOG_UPDATE_BREW_CACHE]="Updating Homebrew cache..."
+        MSG[LOG_FETCH_LATEST_DOCKER]="Fetching latest Docker version..."
+        MSG[INFO_LATEST_DOCKER_VERSION]="Latest Docker version: %s"
         MSG[LOG_DOWNLOAD_DOCKER]="Downloading Docker %s..."
         MSG[LOG_DOWNLOAD_DOCKER_EXTRAS]="Downloading Docker rootless extras %s..."
         MSG[INFO_DOCKER_ARCHIVE_PRESENT]="Docker archive present: %s"
@@ -251,6 +255,31 @@ BREW_CACHE_REPO="${CACHE_DIR}/homebrew.git"
 DOCKER_VERSION="29.1.4"
 DOCKER_EXTRAS_VERSION="29.1.4"
 
+# 获取最新 Docker 版本号
+fetch_latest_docker_version() {
+    local latest
+    latest=$(curl -sL "https://download.docker.com/linux/static/stable/x86_64/" 2>/dev/null | \
+        grep -oP 'href="docker-\K[0-9]+\.[0-9]+\.[0-9]+' | \
+        sort -V | \
+        tail -1)
+    if [ -n "$latest" ]; then
+        printf "%s" "$latest"
+    else
+        printf "%s" "$DOCKER_VERSION"
+    fi
+}
+
+# 获取缓存中已下载的 Docker 版本（用于安装时）
+get_cached_docker_version() {
+    local main_pkg
+    main_pkg=$(find "$CACHE_DIR" -maxdepth 1 -type f -name 'docker-*.tgz' ! -name 'docker-rootless-extras-*.tgz' | sort -V | tail -1)
+    if [ -n "$main_pkg" ]; then
+        basename "$main_pkg" | sed 's/docker-//;s/\.tgz$//'
+    else
+        printf "%s" "$DOCKER_VERSION"
+    fi
+}
+
 SCRIPT_PATH="$(readlink -f "$0")"
 
 # ---------- basic helpers ----------
@@ -339,8 +368,6 @@ run_as_user() {
         SHARE_GROUP="$SHARE_GROUP" \
         GLOBAL_PROFILE="$GLOBAL_PROFILE" \
         BREW_CACHE_REPO="$BREW_CACHE_REPO" \
-        DOCKER_VERSION="$DOCKER_VERSION" \
-        DOCKER_EXTRAS_VERSION="$DOCKER_EXTRAS_VERSION" \
         SCRIPT_NAME="$SCRIPT_NAME" \
         MULTIUSER_LANG="$CURRENT_LANG" \
         "$SCRIPT_PATH" "$@"
@@ -407,25 +434,35 @@ update_homebrew_cache() {
 
 download_docker_archives() {
     ensure_cache_dir
-    local main_pkg="docker-${DOCKER_VERSION}.tgz"
-    local extras_pkg="docker-rootless-extras-${DOCKER_EXTRAS_VERSION}.tgz"
-
-    find "$CACHE_DIR" -maxdepth 1 -type f -name 'docker-*.tgz' ! -name 'docker-rootless-extras-*.tgz' ! -name "$main_pkg" -delete || true
-    find "$CACHE_DIR" -maxdepth 1 -type f -name 'docker-rootless-extras-*.tgz' ! -name "$extras_pkg" -delete || true
+    local version="${1:-$DOCKER_VERSION}"
+    local extras_version="${2:-$DOCKER_EXTRAS_VERSION}"
+    local main_pkg="docker-${version}.tgz"
+    local extras_pkg="docker-rootless-extras-${extras_version}.tgz"
 
     if [ ! -f "$CACHE_DIR/$main_pkg" ]; then
-        info LOG_DOWNLOAD_DOCKER "$DOCKER_VERSION"
+        info LOG_DOWNLOAD_DOCKER "$version"
         curl -L -o "$CACHE_DIR/$main_pkg" "https://download.docker.com/linux/static/stable/x86_64/${main_pkg}"
     else
         info INFO_DOCKER_ARCHIVE_PRESENT "$main_pkg"
     fi
 
     if [ ! -f "$CACHE_DIR/$extras_pkg" ]; then
-        info LOG_DOWNLOAD_DOCKER_EXTRAS "$DOCKER_EXTRAS_VERSION"
+        info LOG_DOWNLOAD_DOCKER_EXTRAS "$extras_version"
         curl -L -o "$CACHE_DIR/$extras_pkg" "https://download.docker.com/linux/static/stable/x86_64/${extras_pkg}"
     else
         info INFO_DOCKER_EXTRAS_PRESENT "$extras_pkg"
     fi
+}
+
+# 清理旧版本 Docker 缓存，只保留指定版本
+cleanup_old_docker_cache() {
+    local keep_version="$1"
+    local keep_extras_version="${2:-$keep_version}"
+    local main_pkg="docker-${keep_version}.tgz"
+    local extras_pkg="docker-rootless-extras-${keep_extras_version}.tgz"
+
+    find "$CACHE_DIR" -maxdepth 1 -type f -name 'docker-*.tgz' ! -name 'docker-rootless-extras-*.tgz' ! -name "$main_pkg" -delete 2>/dev/null || true
+    find "$CACHE_DIR" -maxdepth 1 -type f -name 'docker-rootless-extras-*.tgz' ! -name "$extras_pkg" -delete 2>/dev/null || true
 }
 
 sys_init() {
@@ -455,7 +492,23 @@ sys_update() {
     ensure_global_profile
     ensure_share_dir
     update_homebrew_cache
-    download_docker_archives
+
+    # 获取最新 Docker 版本并更新缓存
+    info LOG_FETCH_LATEST_DOCKER
+    local latest_version
+    latest_version=$(fetch_latest_docker_version)
+    info INFO_LATEST_DOCKER_VERSION "$latest_version"
+
+    # 更新版本变量
+    DOCKER_VERSION="$latest_version"
+    DOCKER_EXTRAS_VERSION="$latest_version"
+
+    # 清理旧版本缓存
+    cleanup_old_docker_cache "$DOCKER_VERSION" "$DOCKER_EXTRAS_VERSION"
+
+    # 下载新版本（如果还没有）
+    download_docker_archives "$DOCKER_VERSION" "$DOCKER_EXTRAS_VERSION"
+
     chmod -R 755 "$CACHE_DIR"
     info LOG_SYS_CACHE_REFRESHED
 }
@@ -631,10 +684,13 @@ prepare_target_user() {
 
 # ---------- module operations (run as target user) ----------
 require_cache_for_module() {
+    local cached_docker_version cached_extras_version
+    cached_docker_version=$(get_cached_docker_version)
+    cached_extras_version="$cached_docker_version"
     case "$1" in
         docker)
-            [ -f "$CACHE_DIR/docker-${DOCKER_VERSION}.tgz" ] || error ERR_CACHE_DOCKER_MISSING "$SCRIPT_NAME"
-            [ -f "$CACHE_DIR/docker-rootless-extras-${DOCKER_EXTRAS_VERSION}.tgz" ] || error ERR_CACHE_DOCKER_MISSING "$SCRIPT_NAME"
+            [ -f "$CACHE_DIR/docker-${cached_docker_version}.tgz" ] || error ERR_CACHE_DOCKER_MISSING "$SCRIPT_NAME"
+            [ -f "$CACHE_DIR/docker-rootless-extras-${cached_extras_version}.tgz" ] || error ERR_CACHE_DOCKER_MISSING "$SCRIPT_NAME"
             ;;
         brew)
             [ -d "$BREW_CACHE_REPO" ] || error ERR_CACHE_BREW_MISSING "$SCRIPT_NAME"
@@ -733,10 +789,13 @@ module_check_brew() {
 module_install_docker() {
     require_cache_for_module docker
     init_user_dbus
+    local cached_docker_version cached_extras_version
+    cached_docker_version=$(get_cached_docker_version)
+    cached_extras_version="$cached_docker_version"
     mkdir -p "$HOME/bin"
     export PATH="$HOME/bin:$PATH"
-    tar -xzf "$CACHE_DIR/docker-${DOCKER_VERSION}.tgz" -C "$HOME/bin" --strip-components=1
-    tar -xzf "$CACHE_DIR/docker-rootless-extras-${DOCKER_EXTRAS_VERSION}.tgz" -C "$HOME/bin" --strip-components=1
+    tar -xzf "$CACHE_DIR/docker-${cached_docker_version}.tgz" -C "$HOME/bin" --strip-components=1
+    tar -xzf "$CACHE_DIR/docker-rootless-extras-${cached_extras_version}.tgz" -C "$HOME/bin" --strip-components=1
 
     if command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
         dockerd-rootless-setuptool.sh install --skip-iptables >/dev/null 2>&1 || true
